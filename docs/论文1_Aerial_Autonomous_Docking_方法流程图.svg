@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <!-- 背景 -->
+  <rect width="900" height="700" fill="#f8f9fa"/>
+  
+  <!-- 标题 -->
+  <text x="450" y="35" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" font-weight="bold" fill="#2c3e50">四旋翼无人机空中自主对接控制方法</text>
+  <text x="450" y="58" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" fill="#7f8c8d">Aerial Autonomous Docking Control Method</text>
+  
+  <!-- 输入层 -->
+  <g id="inputs">
+    <rect x="30" y="90" width="180" height="120" rx="10" fill="#e8f4f8" stroke="#3498db" stroke-width="2"/>
+    <text x="120" y="115" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" font-weight="bold" fill="#2980b9">输入层 (Inputs)</text>
+    
+    <rect x="45" y="125" width="150" height="22" rx="5" fill="#fff" stroke="#3498db" stroke-width="1"/>
+    <text x="120" y="141" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">📷 相机视觉测量</text>
+    
+    <rect x="45" y="152" width="150" height="22" rx="5" fill="#fff" stroke="#3498db" stroke-width="1"/>
+    <text x="120" y="168" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">🧭 IMU姿态信息</text>
+    
+    <rect x="45" y="179" width="150" height="22" rx="5" fill="#fff" stroke="#3498db" stroke-width="1"/>
+    <text x="120" y="195" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">📍 标记位置 dC</text>
+  </g>
+  
+  <!-- 阶段1: 接近阶段 -->
+  <g id="phase1">
+    <rect x="250" y="90" width="160" height="100" rx="8" fill="#fff3cd" stroke="#f39c12" stroke-width="2"/>
+    <text x="330" y="115" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold" fill="#d68910">阶段1: 接近阶段</text>
+    
+    <text x="330" y="140" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">远距离粗定位</text>
+    <text x="330" y="160" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">快速接近目标</text>
+    
+    <text x="330" y="180" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#7f8c8d">Approach Phase</text>
+  </g>
+  
+  <!-- 阶段2: 追踪阶段 -->
+  <g id="phase2">
+    <rect x="440" y="90" width="160" height="100" rx="8" fill="#d4edda" stroke="#27ae60" stroke-width="2"/>
+    <text x="520" y="115" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold" fill="#1e8449">阶段2: 追踪阶段</text>
+    
+    <text x="520" y="140" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">中距离精确定位</text>
+    <text x="520" y="160" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">视线角制导跟踪</text>
+    
+    <text x="520" y="180" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#7f8c8d">Tracking Phase</text>
+  </g>
+  
+  <!-- 阶段3: 对接阶段 -->
+  <g id="phase3">
+    <rect x="630" y="90" width="160" height="100" rx="8" fill="#f8d7da" stroke="#e74c3c" stroke-width="2"/>
+    <text x="710" y="115" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="13" font-weight="bold" fill="#c0392b">阶段3: 对接阶段</text>
+    
+    <text x="710" y="140" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">近距离精确控制</text>
+    <text x="710" y="160" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">完成物理连接</text>
+    
+    <text x="710" y="180" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#7f8c8d">Docking Phase</text>
+  </g>
+  
+  <!-- 核心控制器 -->
+  <g id="controller">
+    <rect x="250" y="220" width="540" height="280" rx="15" fill="#e8daef" stroke="#8e44ad" stroke-width="2"/>
+    <text x="520" y="245" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="16" font-weight="bold" fill="#6c3483">核心控制器: 自适应反步控制 + 干扰抑制</text>
+    
+    <!-- 估计层 -->
+    <rect x="270" y="260" width="230" height="100" rx="8" fill="#fff" stroke="#9b59b6" stroke-width="1.5"/>
+    <text x="385" y="280" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12" font-weight="bold" fill="#8e44ad">自适应估计层</text>
+    
+    <rect x="285" y="290" width="200" height="25" rx="5" fill="#f5eef8" stroke="#bb8fce" stroke-width="1"/>
+    <text x="385" y="307" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">目标速度估计 v̂_target</text>
+    
+    <rect x="285" y="320" width="200" height="25" rx="5" fill="#f5eef8" stroke="#bb8fce" stroke-width="1"/>
+    <text x="385" y="337" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">外部干扰估计 d̂</text>
+    
+    <!-- 控制层 -->
+    <rect x="540" y="260" width="230" height="100" rx="8" fill="#fff" stroke="#9b59b6" stroke-width="1.5"/>
+    <text x="655" y="280" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12" font-weight="bold" fill="#8e44ad">反步控制层</text>
+    
+    <rect x="555" y="295" width="200" height="20" rx="5" fill="#f5eef8" stroke="#bb8fce" stroke-width="1"/>
+    <text x="655" y="309" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">外环: 位置→速度指令</text>
+    
+    <rect x="555" y="320" width="200" height="20" rx="5" fill="#f5eef8" stroke="#bb8fce" stroke-width="1"/>
+    <text x="655" y="334" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">内环: 速度→加速度指令</text>
+    
+    <!-- 控制律公式 -->
+    <rect x="270" y="375" width="500" height="55" rx="8" fill="#fadbd8" stroke="#e74c3c" stroke-width="1"/>
+    <text x="520" y="395" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" font-weight="bold" fill="#c0392b">控制律: u = -k₁·e_pos - k₂·e_vel + v̂_target + d̂ + α</text>
+    
+    <text x="520" y="418" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">e_pos=位置误差, e_vel=速度误差, α=前馈补偿</text>
+  </g>
+  
+  <!-- 输出层 -->
+  <g id="outputs">
+    <rect x="250" y="520" width="540" height="80" rx="10" fill="#d5f4e6" stroke="#1abc9c" stroke-width="2"/>
+    <text x="520" y="545" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="14" font-weight="bold" fill="#16a085">输出层 (Outputs)</text>
+    
+    <rect x="270" y="560" width="150" height="30" rx="5" fill="#fff" stroke="#1abc9c" stroke-width="1"/>
+    <text x="345" y="580" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">🎮 4个旋翼转速指令</text>
+    
+    <rect x="445" y="560" width="150" height="30" rx="5" fill="#fff" stroke="#1abc9c" stroke-width="1"/>
+    <text x="520" y="580" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">📊 估计状态反馈</text>
+    
+    <rect x="620" y="560" width="150" height="30" rx="5" fill="#fff" stroke="#1abc9c" stroke-width="1"/>
+    <text x="695" y="580" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="11" fill="#2c3e50">✅ 对接完成信号</text>
+  </g>
+  
+  <!-- 箭头连接 -->
+  <!-- 输入到阶段 -->
+  <line x1="210" y1="130" x2="240" y2="130" stroke="#3498db" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="210" y1="150" x2="240" y2="140" stroke="#3498db" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="210" y1="170" x2="240" y2="150" stroke="#3498db" stroke-width="2" marker-end="url(#arrow)"/>
+  
+  <!-- 阶段之间的箭头 -->
+  <line x1="410" y1="140" x2="430" y2="140" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="420" y="135" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#27ae60">条件触发</text>
+  
+  <line x1="600" y1="140" x2="620" y2="140" stroke="#e74c3c" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="610" y="135" text-anchor="middle" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#e74c3c">条件触发</text>
+  
+  <!-- 阶段到控制器 -->
+  <line x1="330" y1="190" x2="330" y2="210" stroke="#8e44ad" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="190" x2="520" y2="210" stroke="#8e44ad" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="710" y1="190" x2="710" y2="210" stroke="#8e44ad" stroke-width="2" marker-end="url(#arrow)"/>
+  
+  <!-- 控制器到输出 -->
+  <line x1="520" y1="500" x2="520" y2="515" stroke="#1abc9c" stroke-width="2" marker-end="url(#arrow)"/>
+  
+  <!-- 箭头标记定义 -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#666"/>
+    </marker>
+  </defs>
+  
+  <!-- 图例 -->
+  <g id="legend" transform="translate(30, 620)">
+    <rect x="0" y="0" width="840" height="70" rx="5" fill="#fff" stroke="#bdc3c7" stroke-width="1"/>
+    <text x="10" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="12" font-weight="bold" fill="#2c3e50">图例说明:</text>
+    
+    <rect x="80" y="8" width="15" height="15" fill="#e8f4f8" stroke="#3498db"/>
+    <text x="100" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">输入数据</text>
+    
+    <rect x="160" y="8" width="15" height="15" fill="#fff3cd" stroke="#f39c12"/>
+    <text x="180" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">接近</text>
+    
+    <rect x="230" y="8" width="15" height="15" fill="#d4edda" stroke="#27ae60"/>
+    <text x="250" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">追踪</text>
+    
+    <rect x="290" y="8" width="15" height="15" fill="#f8d7da" stroke="#e74c3c"/>
+    <text x="310" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">对接</text>
+    
+    <rect x="350" y="8" width="15" height="15" fill="#e8daef" stroke="#8e44ad"/>
+    <text x="370" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">核心控制器</text>
+    
+    <rect x="450" y="8" width="15" height="15" fill="#d5f4e6" stroke="#1abc9c"/>
+    <text x="470" y="20" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#2c3e50">输出控制</text>
+    
+    <text x="10" y="45" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#666">💡 核心思想: 分阶段策略降低复杂度 + 自适应估计处理不确定性 + 反步控制保证稳定性</text>
+    
+    <text x="10" y="62" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="10" fill="#666">🔧 适用: 四旋翼对接移动/悬停目标 | 对你项目启发: 三阶段策略可直接用于大四轴接小固定翼</text>
+  </g>
+</svg>

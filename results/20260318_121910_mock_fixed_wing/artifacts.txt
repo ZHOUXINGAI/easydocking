@@ -1,0 +1,6 @@
+distance_convergence.png
+trajectory_xy.png
+trajectory_xz.png
+speed_profile.png
+phase_timeline.png
+summary.txt

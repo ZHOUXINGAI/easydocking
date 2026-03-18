@@ -1,0 +1,8 @@
+# 启动对接服务请求
+float64 approach_distance
+float64 tracking_distance
+float64 docking_distance
+---
+# 响应
+bool success
+string message

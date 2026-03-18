@@ -1,0 +1,6 @@
+# 停止对接服务请求
+string reason
+---
+# 响应
+bool success
+string message

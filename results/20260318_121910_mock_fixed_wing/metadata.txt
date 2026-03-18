@@ -1,0 +1,17 @@
+reason=completed
+rows=881
+phase=COMPLETED
+completed_rows=14
+post_completed_settle_sec=0.600
+post_completed_rows=12
+csv=/home/hw/easydocking/results/20260318_121910_mock_fixed_wing/docking_log.csv
+backend=mock_fixed_wing
+start_mode=auto
+start_delay=4.0
+experiment_duration_sec=90.000
+carrier_offset=54.0,-30.0,0.0
+mini_orbit_center=10.0,-6.0
+mini_takeoff_altitude=30.0
+mini_orbit_radius=55.0
+mini_orbit_speed=10.0
+carrier_max_speed_xy=11.8
