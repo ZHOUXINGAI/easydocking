@@ -1,3 +1,4 @@
+import math
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -19,10 +20,12 @@ def _launch_setup(context, *args, **kwargs):
     use_mock_sim = LaunchConfiguration("use_mock_sim")
     use_px4_odom_bridge = LaunchConfiguration("use_px4_odom_bridge")
     carrier_activate_on_launch = LaunchConfiguration("carrier_activate_on_launch")
+    carrier_use_position_setpoint = LaunchConfiguration("carrier_use_position_setpoint")
     mini_use_offboard_orbit_hold = LaunchConfiguration("mini_use_offboard_orbit_hold")
     mini_orbit_hold_ready_altitude = LaunchConfiguration("mini_orbit_hold_ready_altitude")
     mini_orbit_hold_enable_delay_sec = LaunchConfiguration("mini_orbit_hold_enable_delay_sec")
     mini_allow_orbit_recentering = LaunchConfiguration("mini_allow_orbit_recentering")
+    carrier_offset_auto = LaunchConfiguration("carrier_offset_auto")
     carrier_approach_speed_limit = _as_float(context, "carrier_approach_speed_limit")
     carrier_tracking_speed_limit = _as_float(context, "carrier_tracking_speed_limit")
     carrier_docking_speed_limit = _as_float(context, "carrier_docking_speed_limit")
@@ -30,6 +33,33 @@ def _launch_setup(context, *args, **kwargs):
     mini_orbit_radius = _as_float(context, "mini_orbit_radius")
     mini_orbit_speed = _as_float(context, "mini_orbit_speed")
     mini_loiter_speed_command = _as_float(context, "mini_loiter_speed_command")
+    mini_tracking_speed_command = _as_float(context, "mini_tracking_speed_command")
+    mini_docking_speed_command = _as_float(context, "mini_docking_speed_command")
+    mini_capture_speed_command = _as_float(context, "mini_capture_speed_command")
+    mini_glide_speed_command = _as_float(context, "mini_glide_speed_command")
+    mini_glide_trigger_phase = LaunchConfiguration("mini_glide_trigger_phase")
+    mini_glide_trigger_distance = _as_float(context, "mini_glide_trigger_distance")
+    mini_glide_release_enabled = LaunchConfiguration("mini_glide_release_enabled")
+    mini_glide_release_mode = LaunchConfiguration("mini_glide_release_mode")
+    mini_capture_distance = _as_float(context, "mini_capture_distance")
+    mini_terminal_slowdown_start_distance = _as_float(context, "mini_terminal_slowdown_start_distance")
+    mini_terminal_slowdown_finish_distance = _as_float(context, "mini_terminal_slowdown_finish_distance")
+    mini_terminal_slowdown_max_abs_y = _as_float(context, "mini_terminal_slowdown_max_abs_y")
+    mini_glide_tangent_exit_sync_gate_distance_cap = _as_float(
+        context, "mini_glide_tangent_exit_sync_gate_distance_cap"
+    )
+    mini_glide_tangent_exit_min_hold_sec = _as_float(
+        context, "mini_glide_tangent_exit_min_hold_sec"
+    )
+    mini_glide_tangent_exit_release_distance_max = _as_float(
+        context, "mini_glide_tangent_exit_release_distance_max"
+    )
+    mini_glide_tangent_exit_release_height_error_max = _as_float(
+        context, "mini_glide_tangent_exit_release_height_error_max"
+    )
+    mini_glide_tangent_exit_release_progress_min = _as_float(
+        context, "mini_glide_tangent_exit_release_progress_min"
+    )
     mini_tracking_speed = _as_float(context, "mini_tracking_speed")
     mini_docking_speed = _as_float(context, "mini_docking_speed")
     mini_capture_speed = _as_float(context, "mini_capture_speed")
@@ -49,16 +79,26 @@ def _launch_setup(context, *args, **kwargs):
     soft_attach_vy_threshold = _as_float(context, "soft_attach_vy_threshold")
     soft_attach_vz_threshold = _as_float(context, "soft_attach_vz_threshold")
 
-    carrier_world_offset = [
-        _as_float(context, "carrier_offset_x"),
-        _as_float(context, "carrier_offset_y"),
-        _as_float(context, "carrier_offset_z"),
-    ]
     mini_orbit_start_phase_deg = _as_float(context, "mini_orbit_start_phase_deg")
     mini_orbit_center = [
         _as_float(context, "mini_orbit_center_x"),
         _as_float(context, "mini_orbit_center_y"),
     ]
+    if carrier_offset_auto.perform(context).lower() in {"1", "true", "yes", "on"}:
+        carrier_outside_margin = _as_float(context, "carrier_outside_margin")
+        carrier_outside_angle_deg = _as_float(context, "carrier_outside_angle_deg")
+        outside_ring_radius = mini_orbit_radius + carrier_outside_margin
+        carrier_world_offset = [
+            mini_orbit_center[0] + outside_ring_radius * math.cos(math.radians(carrier_outside_angle_deg)),
+            mini_orbit_center[1] + outside_ring_radius * math.sin(math.radians(carrier_outside_angle_deg)),
+            _as_float(context, "carrier_offset_z"),
+        ]
+    else:
+        carrier_world_offset = [
+            _as_float(context, "carrier_offset_x"),
+            _as_float(context, "carrier_offset_y"),
+            _as_float(context, "carrier_offset_z"),
+        ]
 
     package_share = get_package_share_directory("easydocking_control")
     rviz_config = os.path.join(package_share, "config", "docking.rviz")
@@ -81,11 +121,14 @@ def _launch_setup(context, *args, **kwargs):
             "guidance_gain": 1.0,
             "world_frame": "map",
             "passive_target_mode": True,
-            "desired_relative_position": [0.0, 0.0, 0.4],
+            # Keep some margin away from the lower z-band boundary (0.25m) so we can
+            # accumulate hold time without constantly dipping out of band.
+            "desired_relative_position": [0.0, 0.0, 0.6],
             "terminal_relative_position": [0.0, 0.0, 0.2],
             "carrier_approach_speed_limit": carrier_approach_speed_limit,
             "carrier_tracking_speed_limit": carrier_tracking_speed_limit,
             "carrier_docking_speed_limit": carrier_docking_speed_limit,
+            "carrier_max_accel": carrier_max_accel,
             "intercept_lookahead": 1.6,
             "docking_speed_threshold": 1.0,
         }],
@@ -124,19 +167,26 @@ def _launch_setup(context, *args, **kwargs):
             "final_relative_position": [0.0, 0.0, 0.2],
             "glide_speed": 10.0,
             "glide_descent_rate": 0.4,
-            "glide_trigger_distance": 4.5,
-            "glide_trigger_phase": "DOCKING",
+            "glide_trigger_distance": mini_glide_trigger_distance,
+            "glide_trigger_phase": mini_glide_trigger_phase,
             "auto_takeoff_on_launch": True,
+            "glide_release_mode": mini_glide_release_mode,
             "orbit_start_phase_deg": mini_orbit_start_phase_deg,
             "loiter_speed_command": mini_loiter_speed_command,
-            "glide_speed_command": 10.0,
-            "tracking_speed_command": 9.6,
-            "docking_speed_command": 8.8,
-            "capture_speed_command": 8.0,
-            "capture_distance": 2.0,
-            "terminal_slowdown_start_distance": 3.0,
-            "terminal_slowdown_finish_distance": 0.9,
-            "terminal_slowdown_max_abs_y": 1.0,
+            "glide_speed_command": mini_glide_speed_command,
+            "tracking_speed_command": mini_tracking_speed_command,
+            "docking_speed_command": mini_docking_speed_command,
+            "capture_speed_command": mini_capture_speed_command,
+            "capture_distance": mini_capture_distance,
+            "glide_release_enabled": mini_glide_release_enabled,
+            "terminal_slowdown_start_distance": mini_terminal_slowdown_start_distance,
+            "terminal_slowdown_finish_distance": mini_terminal_slowdown_finish_distance,
+            "terminal_slowdown_max_abs_y": mini_terminal_slowdown_max_abs_y,
+            "glide_tangent_exit_sync_gate_distance_cap": mini_glide_tangent_exit_sync_gate_distance_cap,
+            "glide_tangent_exit_min_hold_sec": mini_glide_tangent_exit_min_hold_sec,
+            "glide_tangent_exit_release_distance_max": mini_glide_tangent_exit_release_distance_max,
+            "glide_tangent_exit_release_height_error_max": mini_glide_tangent_exit_release_height_error_max,
+            "glide_tangent_exit_release_progress_min": mini_glide_tangent_exit_release_progress_min,
             "use_offboard_orbit_hold": mini_use_offboard_orbit_hold,
             "orbit_hold_ready_altitude": mini_orbit_hold_ready_altitude,
             "orbit_hold_enable_delay_sec": mini_orbit_hold_enable_delay_sec,
@@ -144,6 +194,7 @@ def _launch_setup(context, *args, **kwargs):
             "orbit_radial_speed_limit": 1.6,
             "orbit_phase_lead_deg": 16.0,
             "allow_orbit_recentering": mini_allow_orbit_recentering,
+            "native_wait_orbit_refresh_sec": 3.0,
         }],
     )
 
@@ -157,10 +208,12 @@ def _launch_setup(context, *args, **kwargs):
             "use_sim_time": use_sim_time,
             "uav_name": "carrier",
             "px4_namespace": "/px4_1",
+            # SITL SYSID is typically (instance + 1). Carrier runs with `px4 -i 1`, so SYSID=2.
             "vehicle_id": 2,
             "arm_on_start": True,
             "world_offset": carrier_world_offset,
             "use_velocity_feedforward": True,
+            "use_position_setpoint": carrier_use_position_setpoint,
             "activate_on_launch": carrier_activate_on_launch,
         }],
     )
@@ -273,24 +326,45 @@ def generate_launch_description():
         DeclareLaunchArgument("use_mock_sim", default_value="true"),
         DeclareLaunchArgument("use_px4_odom_bridge", default_value="false"),
         DeclareLaunchArgument("carrier_activate_on_launch", default_value="false"),
+        DeclareLaunchArgument("carrier_use_position_setpoint", default_value="true"),
         DeclareLaunchArgument("mini_use_offboard_orbit_hold", default_value="false"),
         DeclareLaunchArgument("mini_orbit_hold_ready_altitude", default_value="29.0"),
         DeclareLaunchArgument("mini_orbit_hold_enable_delay_sec", default_value="4.0"),
         DeclareLaunchArgument("mini_allow_orbit_recentering", default_value="false"),
+        DeclareLaunchArgument("carrier_offset_auto", default_value="true"),
+        DeclareLaunchArgument("carrier_outside_margin", default_value="10.0"),
+        DeclareLaunchArgument("carrier_outside_angle_deg", default_value="-135.0"),
         DeclareLaunchArgument("carrier_approach_speed_limit", default_value="11.6"),
         DeclareLaunchArgument("carrier_tracking_speed_limit", default_value="10.8"),
         DeclareLaunchArgument("carrier_docking_speed_limit", default_value="9.4"),
         DeclareLaunchArgument("mini_takeoff_altitude", default_value="30.0"),
         DeclareLaunchArgument("mini_orbit_radius", default_value="55.0"),
         DeclareLaunchArgument("mini_orbit_speed", default_value="10.0"),
-        DeclareLaunchArgument("mini_loiter_speed_command", default_value="12.0"),
+        DeclareLaunchArgument("mini_loiter_speed_command", default_value="10.5"),
+        DeclareLaunchArgument("mini_glide_speed_command", default_value="10.0"),
+        DeclareLaunchArgument("mini_glide_trigger_phase", default_value="DOCKING"),
+        DeclareLaunchArgument("mini_tracking_speed_command", default_value="10.0"),
+        DeclareLaunchArgument("mini_docking_speed_command", default_value="8.0"),
+        DeclareLaunchArgument("mini_capture_speed_command", default_value="6.0"),
+        DeclareLaunchArgument("mini_glide_trigger_distance", default_value="10.0"),
+        DeclareLaunchArgument("mini_glide_release_enabled", default_value="true"),
+        DeclareLaunchArgument("mini_glide_release_mode", default_value="score_state_machine"),
+        DeclareLaunchArgument("mini_capture_distance", default_value="1.6"),
+        DeclareLaunchArgument("mini_terminal_slowdown_start_distance", default_value="4.2"),
+        DeclareLaunchArgument("mini_terminal_slowdown_finish_distance", default_value="0.8"),
+        DeclareLaunchArgument("mini_terminal_slowdown_max_abs_y", default_value="1.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_sync_gate_distance_cap", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_min_hold_sec", default_value="5.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_distance_max", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_height_error_max", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_progress_min", default_value="-1.0"),
         DeclareLaunchArgument("mini_tracking_speed", default_value="9.7"),
         DeclareLaunchArgument("mini_docking_speed", default_value="6.6"),
         DeclareLaunchArgument("mini_capture_speed", default_value="4.8"),
         DeclareLaunchArgument("mini_slowdown_start_distance", default_value="5.0"),
         DeclareLaunchArgument("mini_slowdown_finish_distance", default_value="2.0"),
         DeclareLaunchArgument("mini_max_accel", default_value="2.0"),
-        DeclareLaunchArgument("carrier_max_accel", default_value="3.2"),
+        DeclareLaunchArgument("carrier_max_accel", default_value="2.5"),
         DeclareLaunchArgument("carrier_max_speed_xy", default_value="11.8"),
         DeclareLaunchArgument("carrier_max_speed_z", default_value="2.2"),
         DeclareLaunchArgument("attach_distance", default_value="0.24"),
@@ -302,8 +376,8 @@ def generate_launch_description():
         DeclareLaunchArgument("soft_attach_vx_threshold", default_value="0.9"),
         DeclareLaunchArgument("soft_attach_vy_threshold", default_value="0.9"),
         DeclareLaunchArgument("soft_attach_vz_threshold", default_value="0.35"),
-        DeclareLaunchArgument("carrier_offset_x", default_value="54.0"),
-        DeclareLaunchArgument("carrier_offset_y", default_value="-30.0"),
+        DeclareLaunchArgument("carrier_offset_x", default_value="0.0"),
+        DeclareLaunchArgument("carrier_offset_y", default_value="0.0"),
         DeclareLaunchArgument("carrier_offset_z", default_value="0.0"),
         DeclareLaunchArgument("mini_orbit_center_x", default_value="10.0"),
         DeclareLaunchArgument("mini_orbit_center_y", default_value="-6.0"),

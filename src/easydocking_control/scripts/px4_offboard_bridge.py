@@ -27,6 +27,7 @@ class Px4OffboardBridge(Node):
         self.declare_parameter("arm_on_start", False)
         self.declare_parameter("world_offset", [0.0, 0.0, 0.0])
         self.declare_parameter("use_velocity_feedforward", True)
+        self.declare_parameter("use_position_setpoint", True)
         self.declare_parameter("activate_on_launch", False)
 
         self.uav_name = self.get_parameter("uav_name").value
@@ -34,6 +35,7 @@ class Px4OffboardBridge(Node):
         self.vehicle_id = int(self.get_parameter("vehicle_id").value)
         self.arm_on_start = bool(self.get_parameter("arm_on_start").value)
         self.use_velocity_feedforward = bool(self.get_parameter("use_velocity_feedforward").value)
+        self.use_position_setpoint = bool(self.get_parameter("use_position_setpoint").value)
         self.activate_on_launch = bool(self.get_parameter("activate_on_launch").value)
         self.world_offset = [
             float(value) for value in self.get_parameter("world_offset").value
@@ -157,15 +159,20 @@ class Px4OffboardBridge(Node):
         if not self.offboard_active:
             return
 
-        if self.pose_setpoint is None:
+        if self.pose_setpoint is None and self.velocity_setpoint is None:
             return
 
         timestamp = int(self.get_clock().now().nanoseconds / 1000)
 
+        use_position = self.use_position_setpoint and self.pose_setpoint is not None
+        use_velocity = self.use_velocity_feedforward and self.velocity_setpoint is not None
+        if not use_position and not use_velocity:
+            return
+
         offboard_mode = OffboardControlMode()
         offboard_mode.timestamp = timestamp
-        offboard_mode.position = True
-        offboard_mode.velocity = self.use_velocity_feedforward and self.velocity_setpoint is not None
+        offboard_mode.position = bool(use_position)
+        offboard_mode.velocity = bool(use_velocity)
         offboard_mode.acceleration = False
         offboard_mode.attitude = False
         offboard_mode.body_rate = False
@@ -183,10 +190,10 @@ class Px4OffboardBridge(Node):
         trajectory.yaw = math.nan
         trajectory.yawspeed = math.nan
 
-        if self.pose_setpoint is not None:
+        if use_position and self.pose_setpoint is not None:
             trajectory.position = self._world_position_to_px4_local(self.pose_setpoint)
 
-        if self.use_velocity_feedforward and self.velocity_setpoint is not None:
+        if use_velocity and self.velocity_setpoint is not None:
             trajectory.velocity = self._world_velocity_to_px4_local(self.velocity_setpoint)
         else:
             trajectory.velocity = [math.nan, math.nan, math.nan]

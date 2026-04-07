@@ -6,8 +6,15 @@ from collections import deque
 
 import rclpy
 from easydocking_msgs.msg import DockingCommand, DockingStatus
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+try:
+    from px4_msgs.msg import AirspeedValidated, TecsStatus
+except ImportError:  # pragma: no cover
+    AirspeedValidated = None
+    TecsStatus = None
 
 
 class AutoStartDocking(Node):
@@ -57,6 +64,58 @@ class AutoStartDocking(Node):
         self.declare_parameter("sm_search_trigger_max_closing_rate", 1.5)
         self.declare_parameter("sm_search_trigger_projected_abs_y", 10.0)
         self.declare_parameter("sm_search_min_samples", 6)
+        self.declare_parameter("sm_enable_orbit_phase_trigger", False)
+        self.declare_parameter("sm_orbit_trigger_min_distance", 110.0)
+        self.declare_parameter("sm_orbit_trigger_max_distance", 140.0)
+        self.declare_parameter("sm_orbit_trigger_min_rel_x", -10.0)
+        self.declare_parameter("sm_orbit_trigger_max_rel_x", 25.0)
+        self.declare_parameter("sm_orbit_trigger_min_rel_y", -135.0)
+        self.declare_parameter("sm_orbit_trigger_max_rel_y", -100.0)
+        self.declare_parameter("sm_orbit_trigger_min_rel_vx", 10.0)
+        self.declare_parameter("sm_orbit_trigger_max_abs_vy", 6.0)
+        self.declare_parameter("sm_orbit_trigger_max_abs_vz", 0.30)
+        self.declare_parameter("sm_orbit_trigger_min_samples", 4)
+        self.declare_parameter("sm_orbit_trigger_stagnation_samples", 3)
+        self.declare_parameter("sm_orbit_score_target_distance", 134.0)
+        self.declare_parameter("sm_orbit_score_target_rel_x", 15.0)
+        self.declare_parameter("sm_orbit_score_target_rel_y", -129.0)
+        self.declare_parameter("sm_enable_idle_orbit_trigger", False)
+        self.declare_parameter("sm_idle_orbit_trigger_min_distance", 38.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_distance", 50.0)
+        self.declare_parameter("sm_idle_orbit_trigger_min_rel_x", 20.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_rel_x", 35.0)
+        self.declare_parameter("sm_idle_orbit_trigger_min_rel_y", -20.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_rel_y", -8.0)
+        self.declare_parameter("sm_idle_orbit_trigger_min_rel_vx", 4.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_rel_vx", 8.0)
+        self.declare_parameter("sm_idle_orbit_trigger_min_rel_vy", 8.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_rel_vy", 13.0)
+        self.declare_parameter("sm_idle_orbit_trigger_max_abs_vz", 1.0)
+        self.declare_parameter("sm_idle_orbit_trigger_min_samples", 8)
+        self.declare_parameter("sm_enable_approach_side_trigger", True)
+        self.declare_parameter("sm_approach_side_trigger_min_distance", 80.0)
+        self.declare_parameter("sm_approach_side_trigger_max_distance", 110.0)
+        self.declare_parameter("sm_approach_side_trigger_min_closing_rate", -2.8)
+        self.declare_parameter("sm_approach_side_trigger_min_time_to_closest", 1.8)
+        self.declare_parameter("sm_approach_side_trigger_max_time_to_closest", 3.5)
+        self.declare_parameter("sm_approach_side_trigger_max_abs_vy", 4.0)
+        self.declare_parameter("sm_approach_side_trigger_max_abs_vz", 1.0)
+        self.declare_parameter("sm_approach_side_trigger_min_samples", 3)
+        self.declare_parameter("require_orbit_completion_before_start", True)
+        self.declare_parameter("orbit_center_x", 10.0)
+        self.declare_parameter("orbit_center_y", -6.0)
+        self.declare_parameter("orbit_radius", 80.0)
+        self.declare_parameter("orbit_gate_ready_altitude", 28.0)
+        self.declare_parameter("orbit_gate_ready_radius_tolerance", 30.0)
+        self.declare_parameter("orbit_gate_min_valid_samples", 8)
+        self.declare_parameter("orbit_gate_required_laps", 1.0)
+        self.declare_parameter("orbit_gate_min_accumulated_angle_deg", 330.0)
+        self.declare_parameter("orbit_gate_return_tolerance_deg", 45.0)
+        self.declare_parameter("require_mini_energy_healthy", False)
+        self.declare_parameter("mini_px4_namespace", "/px4_2")
+        self.declare_parameter("health_min_true_airspeed_mps", 7.0)
+        self.declare_parameter("health_max_underspeed_ratio", 0.35)
+        self.declare_parameter("health_min_samples", 5)
 
         self.min_distance = float(self.get_parameter("min_distance").value)
         self.max_distance = float(self.get_parameter("max_distance").value)
@@ -112,6 +171,152 @@ class AutoStartDocking(Node):
             self.get_parameter("sm_search_trigger_projected_abs_y").value
         )
         self.sm_search_min_samples = int(self.get_parameter("sm_search_min_samples").value)
+        self.sm_enable_orbit_phase_trigger = bool(
+            self.get_parameter("sm_enable_orbit_phase_trigger").value
+        )
+        self.sm_orbit_trigger_min_distance = float(
+            self.get_parameter("sm_orbit_trigger_min_distance").value
+        )
+        self.sm_orbit_trigger_max_distance = float(
+            self.get_parameter("sm_orbit_trigger_max_distance").value
+        )
+        self.sm_orbit_trigger_min_rel_x = float(
+            self.get_parameter("sm_orbit_trigger_min_rel_x").value
+        )
+        self.sm_orbit_trigger_max_rel_x = float(
+            self.get_parameter("sm_orbit_trigger_max_rel_x").value
+        )
+        self.sm_orbit_trigger_min_rel_y = float(
+            self.get_parameter("sm_orbit_trigger_min_rel_y").value
+        )
+        self.sm_orbit_trigger_max_rel_y = float(
+            self.get_parameter("sm_orbit_trigger_max_rel_y").value
+        )
+        self.sm_orbit_trigger_min_rel_vx = float(
+            self.get_parameter("sm_orbit_trigger_min_rel_vx").value
+        )
+        self.sm_orbit_trigger_max_abs_vy = float(
+            self.get_parameter("sm_orbit_trigger_max_abs_vy").value
+        )
+        self.sm_orbit_trigger_max_abs_vz = float(
+            self.get_parameter("sm_orbit_trigger_max_abs_vz").value
+        )
+        self.sm_orbit_trigger_min_samples = int(
+            self.get_parameter("sm_orbit_trigger_min_samples").value
+        )
+        self.sm_orbit_trigger_stagnation_samples = int(
+            self.get_parameter("sm_orbit_trigger_stagnation_samples").value
+        )
+        self.sm_orbit_score_target_distance = float(
+            self.get_parameter("sm_orbit_score_target_distance").value
+        )
+        self.sm_orbit_score_target_rel_x = float(
+            self.get_parameter("sm_orbit_score_target_rel_x").value
+        )
+        self.sm_orbit_score_target_rel_y = float(
+            self.get_parameter("sm_orbit_score_target_rel_y").value
+        )
+        self.sm_enable_idle_orbit_trigger = bool(
+            self.get_parameter("sm_enable_idle_orbit_trigger").value
+        )
+        self.sm_idle_orbit_trigger_min_distance = float(
+            self.get_parameter("sm_idle_orbit_trigger_min_distance").value
+        )
+        self.sm_idle_orbit_trigger_max_distance = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_distance").value
+        )
+        self.sm_idle_orbit_trigger_min_rel_x = float(
+            self.get_parameter("sm_idle_orbit_trigger_min_rel_x").value
+        )
+        self.sm_idle_orbit_trigger_max_rel_x = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_rel_x").value
+        )
+        self.sm_idle_orbit_trigger_min_rel_y = float(
+            self.get_parameter("sm_idle_orbit_trigger_min_rel_y").value
+        )
+        self.sm_idle_orbit_trigger_max_rel_y = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_rel_y").value
+        )
+        self.sm_idle_orbit_trigger_min_rel_vx = float(
+            self.get_parameter("sm_idle_orbit_trigger_min_rel_vx").value
+        )
+        self.sm_idle_orbit_trigger_max_rel_vx = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_rel_vx").value
+        )
+        self.sm_idle_orbit_trigger_min_rel_vy = float(
+            self.get_parameter("sm_idle_orbit_trigger_min_rel_vy").value
+        )
+        self.sm_idle_orbit_trigger_max_rel_vy = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_rel_vy").value
+        )
+        self.sm_idle_orbit_trigger_max_abs_vz = float(
+            self.get_parameter("sm_idle_orbit_trigger_max_abs_vz").value
+        )
+        self.sm_idle_orbit_trigger_min_samples = int(
+            self.get_parameter("sm_idle_orbit_trigger_min_samples").value
+        )
+        self.sm_enable_approach_side_trigger = bool(
+            self.get_parameter("sm_enable_approach_side_trigger").value
+        )
+        self.sm_approach_side_trigger_min_distance = float(
+            self.get_parameter("sm_approach_side_trigger_min_distance").value
+        )
+        self.sm_approach_side_trigger_max_distance = float(
+            self.get_parameter("sm_approach_side_trigger_max_distance").value
+        )
+        self.sm_approach_side_trigger_min_closing_rate = float(
+            self.get_parameter("sm_approach_side_trigger_min_closing_rate").value
+        )
+        self.sm_approach_side_trigger_min_time_to_closest = float(
+            self.get_parameter("sm_approach_side_trigger_min_time_to_closest").value
+        )
+        self.sm_approach_side_trigger_max_time_to_closest = float(
+            self.get_parameter("sm_approach_side_trigger_max_time_to_closest").value
+        )
+        self.sm_approach_side_trigger_max_abs_vy = float(
+            self.get_parameter("sm_approach_side_trigger_max_abs_vy").value
+        )
+        self.sm_approach_side_trigger_max_abs_vz = float(
+            self.get_parameter("sm_approach_side_trigger_max_abs_vz").value
+        )
+        self.sm_approach_side_trigger_min_samples = int(
+            self.get_parameter("sm_approach_side_trigger_min_samples").value
+        )
+        self.require_orbit_completion_before_start = bool(
+            self.get_parameter("require_orbit_completion_before_start").value
+        )
+        self.orbit_center_x = float(self.get_parameter("orbit_center_x").value)
+        self.orbit_center_y = float(self.get_parameter("orbit_center_y").value)
+        self.orbit_radius = float(self.get_parameter("orbit_radius").value)
+        self.orbit_gate_ready_altitude = float(
+            self.get_parameter("orbit_gate_ready_altitude").value
+        )
+        self.orbit_gate_ready_radius_tolerance = float(
+            self.get_parameter("orbit_gate_ready_radius_tolerance").value
+        )
+        self.orbit_gate_min_valid_samples = int(
+            self.get_parameter("orbit_gate_min_valid_samples").value
+        )
+        self.orbit_gate_required_laps = float(
+            self.get_parameter("orbit_gate_required_laps").value
+        )
+        self.orbit_gate_min_accumulated_angle_rad = math.radians(float(
+            self.get_parameter("orbit_gate_min_accumulated_angle_deg").value
+        ))
+        self.orbit_gate_return_tolerance_rad = math.radians(float(
+            self.get_parameter("orbit_gate_return_tolerance_deg").value
+        ))
+        self.require_mini_energy_healthy = bool(
+            self.get_parameter("require_mini_energy_healthy").value
+        )
+        self.mini_px4_namespace = str(self.get_parameter("mini_px4_namespace").value)
+        self.health_min_true_airspeed_mps = float(
+            self.get_parameter("health_min_true_airspeed_mps").value
+        )
+        self.health_max_underspeed_ratio = float(
+            self.get_parameter("health_max_underspeed_ratio").value
+        )
+        self.health_min_samples = int(self.get_parameter("health_min_samples").value)
         self.start_wall = time.time()
         self.below_counter = 0
         self.sent = False
@@ -130,17 +335,145 @@ class AutoStartDocking(Node):
         self.trigger_candidate_announced = False
         self.search_ready_samples = 0
         self.search_best_candidate = None
+        self.orbit_ready_samples = 0
+        self.orbit_best_candidate = None
+        self.orbit_best_score = None
+        self.orbit_stagnation_samples = 0
+        self.orbit_candidate_announced = False
+        self.idle_orbit_ready_samples = 0
+        self.idle_orbit_best_candidate = None
+        self.idle_orbit_candidate_announced = False
+        self.approach_side_ready_samples = 0
+        self.approach_side_best_candidate = None
+        self.approach_side_candidate_announced = False
+        self.orbit_gate_ready_samples = 0
+        self.orbit_gate_tracking_active = not self.require_orbit_completion_before_start
+        self.orbit_gate_completed = not self.require_orbit_completion_before_start
+        self.orbit_gate_initial_angle = None
+        self.orbit_gate_previous_angle = None
+        self.orbit_gate_accumulated_angle = 0.0
+        self.orbit_gate_last_reported_quarter = -1
+        self.orbit_gate_completed_wall = self.start_wall if self.orbit_gate_completed else None
+        self.mini_true_airspeed_mps = math.nan
+        self.mini_underspeed_ratio = math.nan
+        self.mini_health_good_samples = 0
+        self.mini_health_announced = None
 
         latched_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
+        px4_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
 
         self.command_pub = self.create_publisher(DockingCommand, "/docking/command", 10)
         self.command_latched_pub = self.create_publisher(DockingCommand, "/docking/command_latched", latched_qos)
         self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
+        self.create_subscription(Odometry, "/mini/odom", self._mini_odom_cb, 10)
+        if self.require_mini_energy_healthy and AirspeedValidated is not None:
+            self.create_subscription(
+                AirspeedValidated,
+                f"{self.mini_px4_namespace}/fmu/out/airspeed_validated",
+                self._mini_airspeed_cb,
+                px4_qos,
+            )
+            self.create_subscription(
+                AirspeedValidated,
+                f"{self.mini_px4_namespace}/fmu/out/airspeed_validated_v1",
+                self._mini_airspeed_cb,
+                px4_qos,
+            )
+        if self.require_mini_energy_healthy and TecsStatus is not None:
+            self.create_subscription(
+                TecsStatus,
+                f"{self.mini_px4_namespace}/fmu/out/tecs_status",
+                self._mini_tecs_cb,
+                px4_qos,
+            )
+            self.create_subscription(
+                TecsStatus,
+                f"{self.mini_px4_namespace}/fmu/out/tecs_status_v1",
+                self._mini_tecs_cb,
+                px4_qos,
+            )
         self.timer = self.create_timer(0.1, self._timeout_cb)
+
+    def _mini_odom_cb(self, msg: Odometry) -> None:
+        if self.orbit_gate_completed:
+            return
+
+        x = float(msg.pose.pose.position.x)
+        y = float(msg.pose.pose.position.y)
+        z = float(msg.pose.pose.position.z)
+        dx = x - self.orbit_center_x
+        dy = y - self.orbit_center_y
+        radius = math.hypot(dx, dy)
+        angle = math.atan2(dy, dx)
+        ready = (
+            z >= self.orbit_gate_ready_altitude and
+            abs(radius - self.orbit_radius) <= self.orbit_gate_ready_radius_tolerance
+        )
+
+        if not self.orbit_gate_tracking_active:
+            if ready:
+                self.orbit_gate_ready_samples += 1
+                if self.orbit_gate_ready_samples >= self.orbit_gate_min_valid_samples:
+                    self.orbit_gate_tracking_active = True
+                    self.orbit_gate_initial_angle = angle
+                    self.orbit_gate_previous_angle = angle
+                    self.orbit_gate_accumulated_angle = 0.0
+                    self.orbit_gate_last_reported_quarter = 0
+                    self.get_logger().info(
+                        "Orbit gate armed "
+                        f"altitude={z:.2f} radius={radius:.2f} "
+                        f"laps_required={self.orbit_gate_required_laps:.2f}"
+                    )
+            else:
+                self.orbit_gate_ready_samples = 0
+            return
+
+        if self.orbit_gate_previous_angle is None or self.orbit_gate_initial_angle is None:
+            self.orbit_gate_initial_angle = angle
+            self.orbit_gate_previous_angle = angle
+            return
+
+        delta = self._normalize_angle(angle - self.orbit_gate_previous_angle)
+        self.orbit_gate_previous_angle = angle
+        self.orbit_gate_accumulated_angle += delta
+        completed_laps = abs(self.orbit_gate_accumulated_angle) / (2.0 * math.pi)
+        reported_quarter = int(completed_laps * 4.0)
+        if reported_quarter > self.orbit_gate_last_reported_quarter:
+            self.orbit_gate_last_reported_quarter = reported_quarter
+            self.get_logger().info(
+                "Orbit gate progress "
+                f"laps={completed_laps:.2f} altitude={z:.2f} radius={radius:.2f}"
+            )
+
+        returned_to_start = (
+            abs(self._normalize_angle(angle - self.orbit_gate_initial_angle)) <=
+            self.orbit_gate_return_tolerance_rad
+        )
+        if (
+            completed_laps >= self.orbit_gate_required_laps and
+            abs(self.orbit_gate_accumulated_angle) >= self.orbit_gate_min_accumulated_angle_rad and
+            returned_to_start
+        ):
+            self.orbit_gate_completed = True
+            self.orbit_gate_completed_wall = time.time()
+            self.get_logger().info(
+                "Orbit gate completed "
+                f"laps={completed_laps:.2f} altitude={z:.2f} radius={radius:.2f}"
+            )
+
+    def _mini_airspeed_cb(self, msg: AirspeedValidated) -> None:
+        self.mini_true_airspeed_mps = float(msg.true_airspeed_m_s)
+
+    def _mini_tecs_cb(self, msg: TecsStatus) -> None:
+        self.mini_underspeed_ratio = float(msg.underspeed_ratio)
 
     def _status_cb(self, msg: DockingStatus) -> None:
         if msg.is_active:
@@ -149,8 +482,17 @@ class AutoStartDocking(Node):
 
         if self.sent:
             return
+        if self.require_orbit_completion_before_start and not self.orbit_gate_completed:
+            return
         elapsed = time.time() - self.start_wall
         if elapsed < self.min_wait_sec:
+            return
+        if not self._mini_energy_healthy():
+            self.below_counter = 0
+            self.best_candidate = None
+            self.last_distance = None
+            self.increase_counter = 0
+            self._reset_trigger_state()
             return
         self.sample_count += 1
 
@@ -272,6 +614,180 @@ class AutoStartDocking(Node):
             "closing_rate": closing_rate,
             "relative_speed": relative_speed,
         }
+        distance_xy = math.hypot(rel_x, rel_y)
+        relative_speed_xy_sq = rel_vx ** 2 + rel_vy ** 2
+        time_to_closest_xy = math.inf
+        if relative_speed_xy_sq > 1e-6:
+            time_to_closest_xy = - (rel_x * rel_vx + rel_y * rel_vy) / relative_speed_xy_sq
+        sample["time_to_closest_xy"] = time_to_closest_xy
+
+        approach_side_trigger_ok = (
+            self.sm_enable_approach_side_trigger and
+            self.sm_approach_side_trigger_min_distance <= distance <= self.sm_approach_side_trigger_max_distance and
+            closing_rate <= self.sm_approach_side_trigger_min_closing_rate and
+            self.sm_approach_side_trigger_min_time_to_closest <= time_to_closest_xy <= self.sm_approach_side_trigger_max_time_to_closest and
+            abs(rel_vy) <= self.sm_approach_side_trigger_max_abs_vy and
+            abs(rel_vz) <= self.sm_approach_side_trigger_max_abs_vz
+        )
+        if approach_side_trigger_ok:
+            self.approach_side_ready_samples += 1
+            if (
+                self.approach_side_best_candidate is None or
+                distance < float(self.approach_side_best_candidate["distance"])
+            ):
+                self.approach_side_best_candidate = dict(sample)
+            if (
+                self.approach_side_ready_samples >= self.sm_approach_side_trigger_min_samples and
+                self.approach_side_best_candidate is not None and
+                not self.approach_side_candidate_announced
+            ):
+                candidate = self.approach_side_best_candidate
+                self.get_logger().info(
+                    "Auto START approach-side candidate-ready "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f}) "
+                    f"time_to_closest_xy={candidate['time_to_closest_xy']:.3f}"
+                )
+                self.approach_side_candidate_announced = True
+            if (
+                self.approach_side_ready_samples >= self.sm_approach_side_trigger_min_samples and
+                self.approach_side_best_candidate is not None
+            ):
+                candidate = self.approach_side_best_candidate
+                self.sent = True
+                self._publish_start(reason=(
+                    "state-machine-approach-side-ready "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f}) "
+                    f"time_to_closest_xy={candidate['time_to_closest_xy']:.3f}"
+                ))
+                self.trigger_state = "TRIGGERED"
+                return True
+        else:
+            self.approach_side_ready_samples = 0
+            self.approach_side_best_candidate = None
+            self.approach_side_candidate_announced = False
+
+        idle_orbit_trigger_ok = (
+            self.sm_enable_idle_orbit_trigger and
+            self.sm_idle_orbit_trigger_min_distance <= distance <= self.sm_idle_orbit_trigger_max_distance and
+            self.sm_idle_orbit_trigger_min_rel_x <= rel_x <= self.sm_idle_orbit_trigger_max_rel_x and
+            self.sm_idle_orbit_trigger_min_rel_y <= rel_y <= self.sm_idle_orbit_trigger_max_rel_y and
+            self.min_rel_z <= rel_z <= self.max_rel_z and
+            self.sm_idle_orbit_trigger_min_rel_vx <= rel_vx <= self.sm_idle_orbit_trigger_max_rel_vx and
+            self.sm_idle_orbit_trigger_min_rel_vy <= rel_vy <= self.sm_idle_orbit_trigger_max_rel_vy and
+            abs(rel_vz) <= self.sm_idle_orbit_trigger_max_abs_vz and
+            relative_speed <= self.sm_max_relative_speed
+        )
+        if idle_orbit_trigger_ok:
+            self.idle_orbit_ready_samples += 1
+            if (
+                self.idle_orbit_best_candidate is None or
+                distance < float(self.idle_orbit_best_candidate["distance"])
+            ):
+                self.idle_orbit_best_candidate = dict(sample)
+
+            if (
+                self.idle_orbit_ready_samples >= self.sm_idle_orbit_trigger_min_samples and
+                self.idle_orbit_best_candidate is not None and
+                not self.idle_orbit_candidate_announced
+            ):
+                candidate = self.idle_orbit_best_candidate
+                self.get_logger().info(
+                    "Auto START idle-orbit candidate-ready "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f})"
+                )
+                self.idle_orbit_candidate_announced = True
+        else:
+            if (
+                self.idle_orbit_ready_samples >= self.sm_idle_orbit_trigger_min_samples and
+                self.idle_orbit_best_candidate is not None
+            ):
+                candidate = self.idle_orbit_best_candidate
+                self.sent = True
+                self._publish_start(reason=(
+                    "state-machine-idle-orbit-window "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f})"
+                ))
+                self.trigger_state = "TRIGGERED"
+                return True
+            self._reset_idle_orbit_trigger_state()
+
+        orbit_trigger_ok = (
+            self.sm_enable_orbit_phase_trigger and
+            self.sm_orbit_trigger_min_distance <= distance <= self.sm_orbit_trigger_max_distance and
+            self.sm_orbit_trigger_min_rel_x <= rel_x <= self.sm_orbit_trigger_max_rel_x and
+            self.sm_orbit_trigger_min_rel_y <= rel_y <= self.sm_orbit_trigger_max_rel_y and
+            self.min_rel_z <= rel_z <= self.max_rel_z and
+            rel_vx >= self.sm_orbit_trigger_min_rel_vx and
+            abs(rel_vy) <= self.sm_orbit_trigger_max_abs_vy and
+            abs(rel_vz) <= self.sm_orbit_trigger_max_abs_vz and
+            relative_speed <= self.sm_max_relative_speed
+        )
+        if orbit_trigger_ok:
+            self.orbit_ready_samples += 1
+            score = self._orbit_phase_candidate_score(sample)
+            if (
+                self.orbit_best_candidate is None or
+                self.orbit_best_score is None or
+                score < self.orbit_best_score
+            ):
+                self.orbit_best_candidate = dict(sample)
+                self.orbit_best_score = score
+                self.orbit_stagnation_samples = 0
+            else:
+                self.orbit_stagnation_samples += 1
+
+            if (
+                self.orbit_ready_samples >= self.sm_orbit_trigger_min_samples and
+                self.orbit_best_candidate is not None and
+                not self.orbit_candidate_announced
+            ):
+                candidate = self.orbit_best_candidate
+                self.get_logger().info(
+                    "Auto START orbit-phase candidate-ready "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f}) "
+                    f"score={self.orbit_best_score:.3f}"
+                )
+                self.orbit_candidate_announced = True
+
+            if (
+                self.orbit_ready_samples >= self.sm_orbit_trigger_min_samples and
+                self.orbit_best_candidate is not None and
+                self.orbit_stagnation_samples >= self.sm_orbit_trigger_stagnation_samples
+            ):
+                candidate = self.orbit_best_candidate or sample
+                self.sent = True
+                self._publish_start(reason=(
+                    "state-machine-orbit-phase-stagnation "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f})"
+                ))
+                self.trigger_state = "TRIGGERED"
+                return True
+        else:
+            if self.orbit_ready_samples >= self.sm_orbit_trigger_min_samples and self.orbit_best_candidate is not None:
+                candidate = self.orbit_best_candidate
+                self.sent = True
+                self._publish_start(reason=(
+                    "state-machine-orbit-phase-window-end "
+                    f"distance={candidate['distance']:.3f} "
+                    f"rel=({candidate['rel_x']:.3f},{candidate['rel_y']:.3f},{candidate['rel_z']:.3f}) "
+                    f"vel=({candidate['rel_vx']:.3f},{candidate['rel_vy']:.3f},{candidate['rel_vz']:.3f})"
+                ))
+                self.trigger_state = "TRIGGERED"
+                return True
+            self._reset_orbit_phase_trigger_state()
+
         observe_ok = (
             distance <= self.sm_observe_distance and
             abs(rel_y) <= self.sm_observe_abs_y and
@@ -375,8 +891,8 @@ class AutoStartDocking(Node):
             self.trigger_best_candidate is not None and
             self._candidate_is_triggerable(self.trigger_best_candidate)
         ):
+            candidate = self.trigger_best_candidate
             if not self.trigger_candidate_announced:
-                candidate = self.trigger_best_candidate
                 self.get_logger().info(
                     "Auto START candidate-ready "
                     f"distance={candidate['distance']:.3f} "
@@ -444,6 +960,16 @@ class AutoStartDocking(Node):
             0.06 * abs(float(candidate["rel_vy"]))
         )
 
+    def _orbit_phase_candidate_score(self, candidate: dict) -> float:
+        return (
+            abs(float(candidate["distance"]) - self.sm_orbit_score_target_distance) +
+            0.6 * abs(float(candidate["rel_x"]) - self.sm_orbit_score_target_rel_x) +
+            0.8 * abs(float(candidate["rel_y"]) - self.sm_orbit_score_target_rel_y) +
+            0.3 * abs(float(candidate["rel_vy"])) +
+            0.8 * abs(float(candidate["rel_vz"])) +
+            0.1 * max(0.0, self.sm_orbit_trigger_min_rel_vx - float(candidate["rel_vx"]))
+        )
+
     def _candidate_is_triggerable(self, candidate: dict) -> bool:
         rel_x = float(candidate["rel_x"])
         rel_y = float(candidate["rel_y"])
@@ -480,6 +1006,54 @@ class AutoStartDocking(Node):
         self.trigger_candidate_announced = False
         self.search_ready_samples = 0
         self.search_best_candidate = None
+        self._reset_orbit_phase_trigger_state()
+        self._reset_idle_orbit_trigger_state()
+        self.approach_side_ready_samples = 0
+        self.approach_side_best_candidate = None
+        self.approach_side_candidate_announced = False
+
+    def _reset_orbit_phase_trigger_state(self) -> None:
+        self.orbit_ready_samples = 0
+        self.orbit_best_candidate = None
+        self.orbit_best_score = None
+        self.orbit_stagnation_samples = 0
+        self.orbit_candidate_announced = False
+
+    def _reset_idle_orbit_trigger_state(self) -> None:
+        self.idle_orbit_ready_samples = 0
+        self.idle_orbit_best_candidate = None
+        self.idle_orbit_candidate_announced = False
+
+    def _mini_energy_healthy(self) -> bool:
+        if not self.require_mini_energy_healthy:
+            return True
+        healthy = (
+            math.isfinite(self.mini_true_airspeed_mps) and
+            math.isfinite(self.mini_underspeed_ratio) and
+            self.mini_true_airspeed_mps >= self.health_min_true_airspeed_mps and
+            self.mini_underspeed_ratio <= self.health_max_underspeed_ratio
+        )
+        if healthy:
+            self.mini_health_good_samples += 1
+        else:
+            self.mini_health_good_samples = 0
+
+        ready = self.mini_health_good_samples >= self.health_min_samples
+        if self.mini_health_announced != ready:
+            self.mini_health_announced = ready
+            if ready:
+                self.get_logger().info(
+                    "Auto START mini-energy healthy "
+                    f"tas={self.mini_true_airspeed_mps:.2f} "
+                    f"underspeed={self.mini_underspeed_ratio:.3f}"
+                )
+            else:
+                self.get_logger().info(
+                    "Auto START waiting for mini-energy health "
+                    f"tas={self.mini_true_airspeed_mps:.2f} "
+                    f"underspeed={self.mini_underspeed_ratio:.3f}"
+                )
+        return ready
 
     def _log_trigger_state(self, state: str, sample: dict) -> None:
         if self.trigger_state_announced == state:
@@ -510,11 +1084,23 @@ class AutoStartDocking(Node):
                 self._publish_start("republish while waiting for activation")
             return
 
-        if time.time() - self.start_wall >= self.timeout_sec:
+        timeout_start_wall = self.start_wall
+        if self.require_orbit_completion_before_start and self.orbit_gate_completed_wall is not None:
+            timeout_start_wall = self.orbit_gate_completed_wall
+
+        if time.time() - timeout_start_wall >= self.timeout_sec:
             self.get_logger().info(
                 "Auto START timed out without finding a valid geometry window"
             )
             raise SystemExit(1)
+
+    @staticmethod
+    def _normalize_angle(angle: float) -> float:
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
 
 
 def main() -> None:

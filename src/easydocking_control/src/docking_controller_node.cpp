@@ -12,6 +12,7 @@
 #include <easydocking_msgs/msg/docking_command.hpp>
 #include <easydocking_msgs/msg/docking_status.hpp>
 #include <easydocking_msgs/msg/relative_pose.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 #include <easydocking_control/docking_controller.hpp>
 
@@ -59,6 +60,7 @@ private:
     this->declare_parameter("carrier_approach_speed_limit", 3.0);
     this->declare_parameter("carrier_tracking_speed_limit", 2.2);
     this->declare_parameter("carrier_docking_speed_limit", 1.0);
+    this->declare_parameter("carrier_max_accel", 2.5);
     this->declare_parameter("intercept_lookahead", 1.5);
     this->declare_parameter("docking_speed_threshold", 1.0);
   }
@@ -91,6 +93,8 @@ private:
       this->get_parameter("carrier_approach_speed_limit").as_double(),
       this->get_parameter("carrier_tracking_speed_limit").as_double(),
       this->get_parameter("carrier_docking_speed_limit").as_double());
+    controller_->setCarrierMaxAccel(
+      this->get_parameter("carrier_max_accel").as_double());
     controller_->setInterceptLookahead(this->get_parameter("intercept_lookahead").as_double());
     controller_->setDockingSpeedThreshold(this->get_parameter("docking_speed_threshold").as_double());
   }
@@ -125,6 +129,8 @@ private:
       this->create_publisher<easydocking_msgs::msg::RelativePose>("/docking/relative_pose", 10);
     status_pub_ =
       this->create_publisher<easydocking_msgs::msg::DockingStatus>("/docking/status", 10);
+    controller_debug_pub_ =
+      this->create_publisher<std_msgs::msg::Float64MultiArray>("/docking/controller_debug", 10);
   }
 
   void carrierOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -197,6 +203,7 @@ private:
       mini_pose_pub_);
     publishRelativePose();
     publishStatus();
+    publishControllerDebug();
   }
 
   void publishVelocitySetpoint(
@@ -277,6 +284,14 @@ private:
     status_pub_->publish(status);
   }
 
+  void publishControllerDebug()
+  {
+    std_msgs::msg::Float64MultiArray msg;
+    const auto debug = controller_->getControllerDebug();
+    msg.data.assign(debug.begin(), debug.end());
+    controller_debug_pub_->publish(msg);
+  }
+
   std::unique_ptr<DockingController> controller_;
   nav_msgs::msg::Odometry carrier_odom_;
   nav_msgs::msg::Odometry mini_odom_;
@@ -294,6 +309,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr mini_pose_pub_;
   rclcpp::Publisher<easydocking_msgs::msg::RelativePose>::SharedPtr relative_pose_pub_;
   rclcpp::Publisher<easydocking_msgs::msg::DockingStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr controller_debug_pub_;
   rclcpp::Publisher<easydocking_msgs::msg::DockingCommand>::SharedPtr command_latched_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;

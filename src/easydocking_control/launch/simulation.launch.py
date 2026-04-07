@@ -14,10 +14,14 @@ def generate_launch_description():
     use_px4_odom_bridge = LaunchConfiguration("use_px4_odom_bridge")
     start_rviz = LaunchConfiguration("start_rviz")
     carrier_activate_on_launch = LaunchConfiguration("carrier_activate_on_launch")
+    carrier_use_position_setpoint = LaunchConfiguration("carrier_use_position_setpoint")
     mini_use_offboard_orbit_hold = LaunchConfiguration("mini_use_offboard_orbit_hold")
     mini_orbit_hold_ready_altitude = LaunchConfiguration("mini_orbit_hold_ready_altitude")
     mini_orbit_hold_enable_delay_sec = LaunchConfiguration("mini_orbit_hold_enable_delay_sec")
     mini_allow_orbit_recentering = LaunchConfiguration("mini_allow_orbit_recentering")
+    carrier_offset_auto = LaunchConfiguration("carrier_offset_auto")
+    carrier_outside_margin = LaunchConfiguration("carrier_outside_margin")
+    carrier_outside_angle_deg = LaunchConfiguration("carrier_outside_angle_deg")
     carrier_approach_speed_limit = LaunchConfiguration("carrier_approach_speed_limit")
     carrier_tracking_speed_limit = LaunchConfiguration("carrier_tracking_speed_limit")
     carrier_docking_speed_limit = LaunchConfiguration("carrier_docking_speed_limit")
@@ -31,6 +35,23 @@ def generate_launch_description():
     mini_orbit_radius = LaunchConfiguration("mini_orbit_radius")
     mini_orbit_speed = LaunchConfiguration("mini_orbit_speed")
     mini_loiter_speed_command = LaunchConfiguration("mini_loiter_speed_command")
+    mini_glide_speed_command = LaunchConfiguration("mini_glide_speed_command")
+    mini_glide_trigger_phase = LaunchConfiguration("mini_glide_trigger_phase")
+    mini_glide_release_enabled = LaunchConfiguration("mini_glide_release_enabled")
+    mini_glide_release_mode = LaunchConfiguration("mini_glide_release_mode")
+    mini_tracking_speed_command = LaunchConfiguration("mini_tracking_speed_command")
+    mini_docking_speed_command = LaunchConfiguration("mini_docking_speed_command")
+    mini_capture_speed_command = LaunchConfiguration("mini_capture_speed_command")
+    mini_glide_trigger_distance = LaunchConfiguration("mini_glide_trigger_distance")
+    mini_capture_distance = LaunchConfiguration("mini_capture_distance")
+    mini_terminal_slowdown_start_distance = LaunchConfiguration("mini_terminal_slowdown_start_distance")
+    mini_terminal_slowdown_finish_distance = LaunchConfiguration("mini_terminal_slowdown_finish_distance")
+    mini_terminal_slowdown_max_abs_y = LaunchConfiguration("mini_terminal_slowdown_max_abs_y")
+    mini_glide_tangent_exit_sync_gate_distance_cap = LaunchConfiguration("mini_glide_tangent_exit_sync_gate_distance_cap")
+    mini_glide_tangent_exit_min_hold_sec = LaunchConfiguration("mini_glide_tangent_exit_min_hold_sec")
+    mini_glide_tangent_exit_release_distance_max = LaunchConfiguration("mini_glide_tangent_exit_release_distance_max")
+    mini_glide_tangent_exit_release_height_error_max = LaunchConfiguration("mini_glide_tangent_exit_release_height_error_max")
+    mini_glide_tangent_exit_release_progress_min = LaunchConfiguration("mini_glide_tangent_exit_release_progress_min")
     mini_tracking_speed = LaunchConfiguration("mini_tracking_speed")
     mini_docking_speed = LaunchConfiguration("mini_docking_speed")
     mini_capture_speed = LaunchConfiguration("mini_capture_speed")
@@ -65,10 +86,14 @@ def generate_launch_description():
             "use_mock_sim": use_mock_sim,
             "use_px4_odom_bridge": use_px4_odom_bridge,
             "carrier_activate_on_launch": carrier_activate_on_launch,
+            "carrier_use_position_setpoint": carrier_use_position_setpoint,
             "mini_use_offboard_orbit_hold": mini_use_offboard_orbit_hold,
             "mini_orbit_hold_ready_altitude": mini_orbit_hold_ready_altitude,
             "mini_orbit_hold_enable_delay_sec": mini_orbit_hold_enable_delay_sec,
             "mini_allow_orbit_recentering": mini_allow_orbit_recentering,
+            "carrier_offset_auto": carrier_offset_auto,
+            "carrier_outside_margin": carrier_outside_margin,
+            "carrier_outside_angle_deg": carrier_outside_angle_deg,
             "carrier_approach_speed_limit": carrier_approach_speed_limit,
             "carrier_tracking_speed_limit": carrier_tracking_speed_limit,
             "carrier_docking_speed_limit": carrier_docking_speed_limit,
@@ -82,6 +107,23 @@ def generate_launch_description():
             "mini_orbit_radius": mini_orbit_radius,
             "mini_orbit_speed": mini_orbit_speed,
             "mini_loiter_speed_command": mini_loiter_speed_command,
+            "mini_glide_speed_command": mini_glide_speed_command,
+            "mini_glide_trigger_phase": mini_glide_trigger_phase,
+            "mini_glide_release_enabled": mini_glide_release_enabled,
+            "mini_glide_release_mode": mini_glide_release_mode,
+            "mini_tracking_speed_command": mini_tracking_speed_command,
+            "mini_docking_speed_command": mini_docking_speed_command,
+            "mini_capture_speed_command": mini_capture_speed_command,
+            "mini_glide_trigger_distance": mini_glide_trigger_distance,
+            "mini_capture_distance": mini_capture_distance,
+            "mini_terminal_slowdown_start_distance": mini_terminal_slowdown_start_distance,
+            "mini_terminal_slowdown_finish_distance": mini_terminal_slowdown_finish_distance,
+            "mini_terminal_slowdown_max_abs_y": mini_terminal_slowdown_max_abs_y,
+            "mini_glide_tangent_exit_sync_gate_distance_cap": mini_glide_tangent_exit_sync_gate_distance_cap,
+            "mini_glide_tangent_exit_min_hold_sec": mini_glide_tangent_exit_min_hold_sec,
+            "mini_glide_tangent_exit_release_distance_max": mini_glide_tangent_exit_release_distance_max,
+            "mini_glide_tangent_exit_release_height_error_max": mini_glide_tangent_exit_release_height_error_max,
+            "mini_glide_tangent_exit_release_progress_min": mini_glide_tangent_exit_release_progress_min,
             "mini_tracking_speed": mini_tracking_speed,
             "mini_docking_speed": mini_docking_speed,
             "mini_capture_speed": mini_capture_speed,
@@ -117,15 +159,19 @@ def generate_launch_description():
         DeclareLaunchArgument("use_mock_sim", default_value="true"),
         DeclareLaunchArgument("use_px4_odom_bridge", default_value="false"),
         DeclareLaunchArgument("carrier_activate_on_launch", default_value="true"),
+        DeclareLaunchArgument("carrier_use_position_setpoint", default_value="true"),
         DeclareLaunchArgument("mini_use_offboard_orbit_hold", default_value="false"),
         DeclareLaunchArgument("mini_orbit_hold_ready_altitude", default_value="1.5"),
         DeclareLaunchArgument("mini_orbit_hold_enable_delay_sec", default_value="3.0"),
         DeclareLaunchArgument("mini_allow_orbit_recentering", default_value="false"),
+        DeclareLaunchArgument("carrier_offset_auto", default_value="true"),
+        DeclareLaunchArgument("carrier_outside_margin", default_value="10.0"),
+        DeclareLaunchArgument("carrier_outside_angle_deg", default_value="-135.0"),
         DeclareLaunchArgument("carrier_approach_speed_limit", default_value="11.6"),
         DeclareLaunchArgument("carrier_tracking_speed_limit", default_value="10.8"),
         DeclareLaunchArgument("carrier_docking_speed_limit", default_value="9.4"),
-        DeclareLaunchArgument("carrier_offset_x", default_value="54.0"),
-        DeclareLaunchArgument("carrier_offset_y", default_value="-30.0"),
+        DeclareLaunchArgument("carrier_offset_x", default_value="0.0"),
+        DeclareLaunchArgument("carrier_offset_y", default_value="0.0"),
         DeclareLaunchArgument("carrier_offset_z", default_value="0.0"),
         DeclareLaunchArgument("mini_takeoff_altitude", default_value="30.0"),
         DeclareLaunchArgument("mini_orbit_center_x", default_value="10.0"),
@@ -134,13 +180,30 @@ def generate_launch_description():
         DeclareLaunchArgument("mini_orbit_radius", default_value="55.0"),
         DeclareLaunchArgument("mini_orbit_speed", default_value="10.0"),
         DeclareLaunchArgument("mini_loiter_speed_command", default_value="12.0"),
+        DeclareLaunchArgument("mini_glide_speed_command", default_value="10.0"),
+        DeclareLaunchArgument("mini_glide_trigger_phase", default_value="DOCKING"),
+        DeclareLaunchArgument("mini_glide_release_enabled", default_value="true"),
+        DeclareLaunchArgument("mini_glide_release_mode", default_value="score_state_machine"),
+        DeclareLaunchArgument("mini_tracking_speed_command", default_value="10.0"),
+        DeclareLaunchArgument("mini_docking_speed_command", default_value="8.0"),
+        DeclareLaunchArgument("mini_capture_speed_command", default_value="6.0"),
+        DeclareLaunchArgument("mini_glide_trigger_distance", default_value="10.0"),
+        DeclareLaunchArgument("mini_capture_distance", default_value="1.6"),
+        DeclareLaunchArgument("mini_terminal_slowdown_start_distance", default_value="4.2"),
+        DeclareLaunchArgument("mini_terminal_slowdown_finish_distance", default_value="0.8"),
+        DeclareLaunchArgument("mini_terminal_slowdown_max_abs_y", default_value="1.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_sync_gate_distance_cap", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_min_hold_sec", default_value="5.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_distance_max", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_height_error_max", default_value="0.0"),
+        DeclareLaunchArgument("mini_glide_tangent_exit_release_progress_min", default_value="-1.0"),
         DeclareLaunchArgument("mini_tracking_speed", default_value="9.7"),
         DeclareLaunchArgument("mini_docking_speed", default_value="6.6"),
         DeclareLaunchArgument("mini_capture_speed", default_value="4.8"),
         DeclareLaunchArgument("mini_slowdown_start_distance", default_value="5.0"),
         DeclareLaunchArgument("mini_slowdown_finish_distance", default_value="2.0"),
         DeclareLaunchArgument("mini_max_accel", default_value="2.0"),
-        DeclareLaunchArgument("carrier_max_accel", default_value="3.2"),
+        DeclareLaunchArgument("carrier_max_accel", default_value="2.5"),
         DeclareLaunchArgument("carrier_max_speed_xy", default_value="11.8"),
         DeclareLaunchArgument("carrier_max_speed_z", default_value="2.2"),
         DeclareLaunchArgument("attach_distance", default_value="0.24"),
