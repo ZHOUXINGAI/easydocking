@@ -1,0 +1,30 @@
+Resume point: `results/20260324_144127_px4_sih`
+
+Current validated status
+- `mini` stays in wait-orbit before `DOCKING`; no early glide in `TRACKING`
+- auto-start state machine has been updated for the new idle/wait-orbit semantics
+- batch validator has `semantic_activation` mode with early-stop logic
+- 10/10 activation validation passed:
+  `results/20260324_142320_semantic_activation_batch_idle_orbit_autostart_v2/batch_summary.txt`
+
+Files changed in this round
+- `src/easydocking_control/scripts/auto_start_docking.py`
+- `scripts/run_px4_sih_docking_experiment.sh`
+- `scripts/validate_px4_change_batch.py`
+- `src/easydocking_control/src/docking_controller.cpp`
+
+Most recent unvalidated change
+- Adjusted `APPROACH` control in `docking_controller.cpp` to use a stronger track-frame intercept policy
+- Built successfully
+- Single smoke test result:
+  `results/20260324_144127_px4_sih`
+- Smoke test outcome:
+  - auto-start worked
+  - final_phase=APPROACH
+  - min_distance_m=28.179
+  - fixed-wing TECS showed stress (`mini_tecs_max_underspeed_ratio=1.000`)
+
+Next step when resuming
+1. Run 10-repeat early-stop validation on the current `APPROACH` change
+2. If first 2 runs fail, keep fail samples only and analyze why `APPROACH -> TRACKING` is not happening
+3. Inspect TECS / airspeed around the closest approach window before changing more carrier logic
