@@ -9,6 +9,7 @@ from pathlib import Path
 from classify_px4_sih_result import (
     best_distance_row,
     classify_result,
+    compute_final_pass_metrics,
     compute_start_cluster_scores,
     compute_start_metrics,
     first_non_idle_row,
@@ -154,6 +155,14 @@ def main() -> int:
             "classification",
             "classification_reasons",
             "final_phase",
+            "final_pass",
+            "final_pass_hold_sec",
+            "final_rel_x_m",
+            "final_rel_y_m",
+            "final_rel_z_m",
+            "final_distance_m",
+            "final_rel_speed_mps",
+            "final_abs_xy_max_m",
             "min_distance_m",
             "start_phase",
             "start_t",
@@ -226,6 +235,7 @@ def main() -> int:
                 continue
 
             classification, reasons = classify_result(result_dir)
+            final_metrics = compute_final_pass_metrics(rows, summary)
             start = first_non_idle_row(rows)
             start_metrics = compute_start_metrics(start)
             start_cluster_scores = compute_start_cluster_scores(start)
@@ -249,6 +259,14 @@ def main() -> int:
                 classification,
                 " | ".join(reasons),
                 summary.get("final_phase", ""),
+                final_metrics.get("final_pass", math.nan),
+                final_metrics.get("final_pass_hold_sec", math.nan),
+                final_metrics.get("final_rel_x_m", math.nan),
+                final_metrics.get("final_rel_y_m", math.nan),
+                final_metrics.get("final_rel_z_m", math.nan),
+                final_metrics.get("final_distance_m", math.nan),
+                final_metrics.get("final_rel_speed_mps", math.nan),
+                final_metrics.get("final_abs_xy_max_m", math.nan),
                 summary.get("min_distance_m", ""),
                 (start or {}).get("phase", ""),
                 safe_float(start or {}, "t"),

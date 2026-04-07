@@ -11,6 +11,14 @@ START_CLUSTER_A_SPREAD = (1.6, 1.2, 0.25, 0.25)
 START_CLUSTER_B_CENTER = (-5.395847, 102.9623125, -6.2016955, -10.510685)
 START_CLUSTER_B_SPREAD = (0.9, 1.2, 0.22, 0.18)
 
+FINAL_PASS_XY_ABS_MAX_M = 0.10
+FINAL_PASS_Z_MIN_M = 0.15
+FINAL_PASS_Z_MAX_M = 0.45
+FINAL_PASS_DISTANCE_MAX_M = 0.30
+FINAL_PASS_REL_SPEED_MAX_MPS = 0.40
+FINAL_PASS_HOLD_MIN_SEC = 0.30
+FINAL_PASS_PHASES = {"DOCKING", "COMPLETED"}
+
 
 def load_summary(path: Path) -> dict[str, str]:
     summary: dict[str, str] = {}
@@ -38,12 +46,135 @@ def safe_float(row: dict[str, str], key: str, default: float = math.nan) -> floa
         return default
 
 
+def _finite(value: float) -> bool:
+    return math.isfinite(value)
+
+
 def first_non_idle_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
     return next((row for row in rows if row.get("phase") and row.get("phase") != "IDLE"), None)
 
 
+def last_non_idle_row(rows: list[dict[str, str]]) -> dict[str, str] | None:
+    for row in reversed(rows):
+        if row.get("phase") and row.get("phase") != "IDLE":
+            return row
+    return None
+
+
 def first_phase_row(rows: list[dict[str, str]], phase: str) -> dict[str, str] | None:
     return next((row for row in rows if row.get("phase") == phase), None)
+
+
+def _row_relative_speed_mps(row: dict[str, str]) -> float:
+    speed = safe_float(row, "controller_relative_speed")
+    if _finite(speed):
+        return speed
+    rel_vx = safe_float(row, "rel_vx")
+    rel_vy = safe_float(row, "rel_vy")
+    rel_vz = safe_float(row, "rel_vz")
+    if _finite(rel_vx) and _finite(rel_vy) and _finite(rel_vz):
+        return math.sqrt(rel_vx * rel_vx + rel_vy * rel_vy + rel_vz * rel_vz)
+    return math.nan
+
+
+def compute_final_pass_hold_time_sec(rows: list[dict[str, str]]) -> float:
+    """Longest continuous time span satisfying FINAL_PASS constraints."""
+    best = 0.0
+    current = 0.0
+    last_t = math.nan
+    last_ok = False
+
+    for row in rows:
+        phase = (row.get("phase") or "").strip()
+        t = safe_float(row, "t")
+        rel_x = safe_float(row, "rel_x")
+        rel_y = safe_float(row, "rel_y")
+        rel_z = safe_float(row, "rel_z")
+        distance = safe_float(row, "relative_distance")
+        rel_speed = _row_relative_speed_mps(row)
+
+        ok = (
+            phase in FINAL_PASS_PHASES and
+            _finite(t) and
+            _finite(rel_x) and
+            _finite(rel_y) and
+            _finite(rel_z) and
+            _finite(distance) and
+            _finite(rel_speed) and
+            abs(rel_x) <= FINAL_PASS_XY_ABS_MAX_M and
+            abs(rel_y) <= FINAL_PASS_XY_ABS_MAX_M and
+            FINAL_PASS_Z_MIN_M <= rel_z <= FINAL_PASS_Z_MAX_M and
+            distance <= FINAL_PASS_DISTANCE_MAX_M and
+            rel_speed <= FINAL_PASS_REL_SPEED_MAX_MPS
+        )
+
+        if ok and last_ok and _finite(last_t):
+            dt = t - last_t
+            if dt > 0.0 and dt < 1.0:
+                current += dt
+        elif ok:
+            current = 0.0
+        else:
+            current = 0.0
+
+        best = max(best, current)
+        last_t = t
+        last_ok = ok
+
+    return best
+
+
+def compute_final_pass_metrics(
+    rows: list[dict[str, str]],
+    summary: dict[str, str] | None = None,
+) -> dict[str, object]:
+    final_phase = ""
+    if summary is not None:
+        final_phase = (summary.get("final_phase") or "").strip()
+
+    last_row = last_non_idle_row(rows) or (rows[-1] if rows else {})
+    final_rel_x = safe_float(last_row, "rel_x")
+    final_rel_y = safe_float(last_row, "rel_y")
+    final_rel_z = safe_float(last_row, "rel_z")
+    final_distance = safe_float(last_row, "relative_distance")
+    final_rel_speed = _row_relative_speed_mps(last_row)
+    final_abs_xy_max = (
+        max(abs(final_rel_x), abs(final_rel_y))
+        if _finite(final_rel_x) and _finite(final_rel_y)
+        else math.nan
+    )
+
+    hold_sec = compute_final_pass_hold_time_sec(rows)
+    final_pass = (
+        final_phase == "COMPLETED" and
+        _finite(hold_sec) and
+        hold_sec >= FINAL_PASS_HOLD_MIN_SEC
+    )
+
+    reasons: list[str] = []
+    if final_phase != "COMPLETED":
+        reasons.append(f"final_phase={final_phase or 'UNKNOWN'}")
+    reasons.append(f"final_hold_sec={hold_sec:.3f}")
+    if _finite(final_abs_xy_max):
+        reasons.append(f"final_abs_xy_max_m={final_abs_xy_max:.3f}")
+    if _finite(final_rel_z):
+        reasons.append(f"final_rel_z_m={final_rel_z:.3f}")
+    if _finite(final_rel_speed):
+        reasons.append(f"final_rel_speed_mps={final_rel_speed:.3f}")
+    if _finite(final_distance):
+        reasons.append(f"final_distance_m={final_distance:.3f}")
+
+    return {
+        "final_pass": 1.0 if final_pass else 0.0,
+        "final_pass_hold_sec": hold_sec,
+        "final_rel_x_m": final_rel_x,
+        "final_rel_y_m": final_rel_y,
+        "final_rel_z_m": final_rel_z,
+        "final_distance_m": final_distance,
+        "final_rel_speed_mps": final_rel_speed,
+        "final_abs_xy_max_m": final_abs_xy_max,
+        "final_pass_reasons": reasons,
+    }
 
 
 def best_distance_row(
@@ -176,7 +307,12 @@ def classify_result(result_dir: Path) -> tuple[str, list[str]]:
     min_distance = float(summary.get("min_distance_m", "nan"))
 
     if final_phase == "COMPLETED":
-        return "completed", [f"min_distance_m={min_distance:.3f}"]
+        final_metrics = compute_final_pass_metrics(rows, summary)
+        final_pass = float(final_metrics.get("final_pass", 0.0)) >= 0.5
+        final_reasons = list(final_metrics.get("final_pass_reasons", []))
+        if final_pass:
+            return "final-pass", [f"min_distance_m={min_distance:.3f}", *final_reasons]
+        return "completed-but-not-final", [f"min_distance_m={min_distance:.3f}", *final_reasons]
 
     if "Timeout waiting for docking window" in start_log or "Timeout waiting for mini-energy health" in start_log:
         reasons.append("starter_timeout")
