@@ -357,6 +357,18 @@ final_pass_z_max_m=${FINAL_PASS_Z_MAX_M:-0.45}
 final_pass_distance_max_m=${FINAL_PASS_DISTANCE_MAX_M:-0.30}
 final_pass_rel_speed_max_mps=${FINAL_PASS_REL_SPEED_MAX_MPS:-0.40}
 final_pass_hold_min_sec=${FINAL_PASS_HOLD_MIN_SEC:-0.30}
+final_pass_v1_xy_abs_max_m=${FINAL_PASS_V1_XY_ABS_MAX_M:-0.10}
+final_pass_v1_z_min_m=${FINAL_PASS_V1_Z_MIN_M:-0.15}
+final_pass_v1_z_max_m=${FINAL_PASS_V1_Z_MAX_M:-0.45}
+final_pass_v1_distance_max_m=${FINAL_PASS_V1_DISTANCE_MAX_M:-0.30}
+final_pass_v1_rel_speed_max_mps=${FINAL_PASS_V1_REL_SPEED_MAX_MPS:-0.40}
+final_pass_v1_hold_min_sec=${FINAL_PASS_V1_HOLD_MIN_SEC:-0.30}
+final_pass_loose_xy_abs_max_m=${FINAL_PASS_LOOSE_XY_ABS_MAX_M:-0.15}
+final_pass_loose_z_min_m=${FINAL_PASS_LOOSE_Z_MIN_M:-0.15}
+final_pass_loose_z_max_m=${FINAL_PASS_LOOSE_Z_MAX_M:-0.55}
+final_pass_loose_distance_max_m=${FINAL_PASS_LOOSE_DISTANCE_MAX_M:-0.40}
+final_pass_loose_rel_speed_max_mps=${FINAL_PASS_LOOSE_REL_SPEED_MAX_MPS:-0.60}
+final_pass_loose_hold_min_sec=${FINAL_PASS_LOOSE_HOLD_MIN_SEC:-0.30}
 EOF
 }
 

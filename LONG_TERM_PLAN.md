@@ -8,6 +8,7 @@ At the start of every session: read this file, then update the status checkboxes
 ## Current milestone snapshot
 - [x] **M3 5/5 PASS** (hold-based semantic pass)
 - [x] **FINAL_PASS implemented (v1)** (COMPLETED + tight terminal constraints + sustained hold)
+- [x] **FINAL_PASS dual-track output** (`v1` strict + `loose` trend gate)
 - [ ] **Terminal convergence not dependent on run duration**
 - [ ] **Terminal error tightened** (<=0.1m class)
 - [ ] **Regression harness** (N-run + top failure reasons)
@@ -43,6 +44,7 @@ Goal: avoid “M3 pass but not truly docked”. Make FINAL_PASS explicit and mea
 
 **Notes / Next**
 - Next: tune thresholds so “final-pass” aligns with what we want physically (current v1 is intentionally strict).
+- Current practice: treat `final-pass` as **v1 strict**; also watch `final_pass_loose` to track trend and speed up iteration.
 
 ## Workstream 2 — Make terminal convergence time-invariant
 Goal: remove reliance on extending `EXPERIMENT_DURATION_SEC` to “finish shrinking XY”.

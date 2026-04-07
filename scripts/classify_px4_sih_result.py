@@ -23,29 +23,22 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-FINAL_PASS_PROFILE = (os.getenv("FINAL_PASS_PROFILE") or "v1").strip().lower()
-
-if FINAL_PASS_PROFILE == "loose":
-    _DEFAULT_FINAL_PASS_XY_ABS_MAX_M = 0.15
-    _DEFAULT_FINAL_PASS_Z_MIN_M = 0.15
-    _DEFAULT_FINAL_PASS_Z_MAX_M = 0.55
-    _DEFAULT_FINAL_PASS_DISTANCE_MAX_M = 0.40
-    _DEFAULT_FINAL_PASS_REL_SPEED_MAX_MPS = 0.60
-    _DEFAULT_FINAL_PASS_HOLD_MIN_SEC = 0.30
-else:
-    _DEFAULT_FINAL_PASS_XY_ABS_MAX_M = 0.10
-    _DEFAULT_FINAL_PASS_Z_MIN_M = 0.15
-    _DEFAULT_FINAL_PASS_Z_MAX_M = 0.45
-    _DEFAULT_FINAL_PASS_DISTANCE_MAX_M = 0.30
-    _DEFAULT_FINAL_PASS_REL_SPEED_MAX_MPS = 0.40
-    _DEFAULT_FINAL_PASS_HOLD_MIN_SEC = 0.30
-
-FINAL_PASS_XY_ABS_MAX_M = _env_float("FINAL_PASS_XY_ABS_MAX_M", _DEFAULT_FINAL_PASS_XY_ABS_MAX_M)
-FINAL_PASS_Z_MIN_M = _env_float("FINAL_PASS_Z_MIN_M", _DEFAULT_FINAL_PASS_Z_MIN_M)
-FINAL_PASS_Z_MAX_M = _env_float("FINAL_PASS_Z_MAX_M", _DEFAULT_FINAL_PASS_Z_MAX_M)
-FINAL_PASS_DISTANCE_MAX_M = _env_float("FINAL_PASS_DISTANCE_MAX_M", _DEFAULT_FINAL_PASS_DISTANCE_MAX_M)
-FINAL_PASS_REL_SPEED_MAX_MPS = _env_float("FINAL_PASS_REL_SPEED_MAX_MPS", _DEFAULT_FINAL_PASS_REL_SPEED_MAX_MPS)
-FINAL_PASS_HOLD_MIN_SEC = _env_float("FINAL_PASS_HOLD_MIN_SEC", _DEFAULT_FINAL_PASS_HOLD_MIN_SEC)
+FINAL_PASS_V1_DEFAULT = {
+    "xy_abs_max_m": 0.10,
+    "z_min_m": 0.15,
+    "z_max_m": 0.45,
+    "distance_max_m": 0.30,
+    "rel_speed_max_mps": 0.40,
+    "hold_min_sec": 0.30,
+}
+FINAL_PASS_LOOSE_DEFAULT = {
+    "xy_abs_max_m": 0.15,
+    "z_min_m": 0.15,
+    "z_max_m": 0.55,
+    "distance_max_m": 0.40,
+    "rel_speed_max_mps": 0.60,
+    "hold_min_sec": 0.30,
+}
 FINAL_PASS_PHASES = {"DOCKING", "COMPLETED"}
 
 
@@ -58,37 +51,48 @@ def _summary_float(summary: dict[str, str] | None, key: str) -> float:
         return math.nan
 
 
-def _final_pass_config_from_summary(summary: dict[str, str] | None) -> tuple[dict[str, float | str], str]:
-    """Return (cfg, source). Source is 'summary' when cfg keys exist, else 'env'."""
-    cfg: dict[str, float | str] = {
-        "profile": FINAL_PASS_PROFILE,
-        "xy_abs_max_m": FINAL_PASS_XY_ABS_MAX_M,
-        "z_min_m": FINAL_PASS_Z_MIN_M,
-        "z_max_m": FINAL_PASS_Z_MAX_M,
-        "distance_max_m": FINAL_PASS_DISTANCE_MAX_M,
-        "rel_speed_max_mps": FINAL_PASS_REL_SPEED_MAX_MPS,
-        "hold_min_sec": FINAL_PASS_HOLD_MIN_SEC,
-    }
+def _final_pass_cfg_from_summary_or_env(
+    summary: dict[str, str] | None,
+    *,
+    kind: str,
+) -> tuple[dict[str, float], str]:
+    defaults = FINAL_PASS_V1_DEFAULT if kind == "v1" else FINAL_PASS_LOOSE_DEFAULT
+    summary_prefix = f"final_pass_{kind}"
 
-    profile = (summary or {}).get("final_pass_profile")
-    if profile:
-        cfg["profile"] = str(profile).strip()
-
-    xy = _summary_float(summary, "final_pass_xy_abs_max_m_cfg")
-    z_min = _summary_float(summary, "final_pass_z_min_m_cfg")
-    z_max = _summary_float(summary, "final_pass_z_max_m_cfg")
-    d_max = _summary_float(summary, "final_pass_distance_max_m_cfg")
-    v_max = _summary_float(summary, "final_pass_rel_speed_max_mps_cfg")
-    hold_min = _summary_float(summary, "final_pass_hold_min_sec_cfg")
+    xy = _summary_float(summary, f"{summary_prefix}_xy_abs_max_m_cfg")
+    z_min = _summary_float(summary, f"{summary_prefix}_z_min_m_cfg")
+    z_max = _summary_float(summary, f"{summary_prefix}_z_max_m_cfg")
+    d_max = _summary_float(summary, f"{summary_prefix}_distance_max_m_cfg")
+    v_max = _summary_float(summary, f"{summary_prefix}_rel_speed_max_mps_cfg")
+    hold_min = _summary_float(summary, f"{summary_prefix}_hold_min_sec_cfg")
 
     if all(_finite(v) for v in [xy, z_min, z_max, d_max, v_max, hold_min]):
-        cfg["xy_abs_max_m"] = float(xy)
-        cfg["z_min_m"] = float(z_min)
-        cfg["z_max_m"] = float(z_max)
-        cfg["distance_max_m"] = float(d_max)
-        cfg["rel_speed_max_mps"] = float(v_max)
-        cfg["hold_min_sec"] = float(hold_min)
-        return cfg, "summary"
+        return {
+            "xy_abs_max_m": float(xy),
+            "z_min_m": float(z_min),
+            "z_max_m": float(z_max),
+            "distance_max_m": float(d_max),
+            "rel_speed_max_mps": float(v_max),
+            "hold_min_sec": float(hold_min),
+        }, "summary"
+
+    # Env override (optional); v1 also supports legacy FINAL_PASS_* env vars.
+    env_prefix = "FINAL_PASS_V1" if kind == "v1" else "FINAL_PASS_LOOSE"
+    cfg = dict(defaults)
+    cfg["xy_abs_max_m"] = _env_float(f"{env_prefix}_XY_ABS_MAX_M", cfg["xy_abs_max_m"])
+    cfg["z_min_m"] = _env_float(f"{env_prefix}_Z_MIN_M", cfg["z_min_m"])
+    cfg["z_max_m"] = _env_float(f"{env_prefix}_Z_MAX_M", cfg["z_max_m"])
+    cfg["distance_max_m"] = _env_float(f"{env_prefix}_DISTANCE_MAX_M", cfg["distance_max_m"])
+    cfg["rel_speed_max_mps"] = _env_float(f"{env_prefix}_REL_SPEED_MAX_MPS", cfg["rel_speed_max_mps"])
+    cfg["hold_min_sec"] = _env_float(f"{env_prefix}_HOLD_MIN_SEC", cfg["hold_min_sec"])
+
+    if kind == "v1":
+        cfg["xy_abs_max_m"] = _env_float("FINAL_PASS_XY_ABS_MAX_M", cfg["xy_abs_max_m"])
+        cfg["z_min_m"] = _env_float("FINAL_PASS_Z_MIN_M", cfg["z_min_m"])
+        cfg["z_max_m"] = _env_float("FINAL_PASS_Z_MAX_M", cfg["z_max_m"])
+        cfg["distance_max_m"] = _env_float("FINAL_PASS_DISTANCE_MAX_M", cfg["distance_max_m"])
+        cfg["rel_speed_max_mps"] = _env_float("FINAL_PASS_REL_SPEED_MAX_MPS", cfg["rel_speed_max_mps"])
+        cfg["hold_min_sec"] = _env_float("FINAL_PASS_HOLD_MIN_SEC", cfg["hold_min_sec"])
 
     return cfg, "env"
 
@@ -225,43 +229,60 @@ def compute_final_pass_metrics(
         else math.nan
     )
 
-    cfg, cfg_source = _final_pass_config_from_summary(summary)
-    xy_abs_max_m = float(cfg["xy_abs_max_m"])  # type: ignore[arg-type]
-    z_min_m = float(cfg["z_min_m"])  # type: ignore[arg-type]
-    z_max_m = float(cfg["z_max_m"])  # type: ignore[arg-type]
-    distance_max_m = float(cfg["distance_max_m"])  # type: ignore[arg-type]
-    rel_speed_max_mps = float(cfg["rel_speed_max_mps"])  # type: ignore[arg-type]
-    hold_min_sec = float(cfg["hold_min_sec"])  # type: ignore[arg-type]
-    profile = str(cfg["profile"])
+    v1_cfg, v1_source = _final_pass_cfg_from_summary_or_env(summary, kind="v1")
+    loose_cfg, loose_source = _final_pass_cfg_from_summary_or_env(summary, kind="loose")
 
-    hold_sec = compute_final_pass_hold_time_sec(
+    v1_hold_sec = compute_final_pass_hold_time_sec(
         rows,
-        xy_abs_max_m=xy_abs_max_m,
-        z_min_m=z_min_m,
-        z_max_m=z_max_m,
-        distance_max_m=distance_max_m,
-        rel_speed_max_mps=rel_speed_max_mps,
+        xy_abs_max_m=v1_cfg["xy_abs_max_m"],
+        z_min_m=v1_cfg["z_min_m"],
+        z_max_m=v1_cfg["z_max_m"],
+        distance_max_m=v1_cfg["distance_max_m"],
+        rel_speed_max_mps=v1_cfg["rel_speed_max_mps"],
     )
     final_pass = (
         final_phase == "COMPLETED" and
-        _finite(hold_sec) and
-        hold_sec >= hold_min_sec
+        _finite(v1_hold_sec) and
+        v1_hold_sec >= v1_cfg["hold_min_sec"]
+    )
+
+    loose_hold_sec = compute_final_pass_hold_time_sec(
+        rows,
+        xy_abs_max_m=loose_cfg["xy_abs_max_m"],
+        z_min_m=loose_cfg["z_min_m"],
+        z_max_m=loose_cfg["z_max_m"],
+        distance_max_m=loose_cfg["distance_max_m"],
+        rel_speed_max_mps=loose_cfg["rel_speed_max_mps"],
+    )
+    final_pass_loose = (
+        final_phase == "COMPLETED" and
+        _finite(loose_hold_sec) and
+        loose_hold_sec >= loose_cfg["hold_min_sec"]
     )
 
     reasons: list[str] = []
-    reasons.append(f"final_profile={profile}")
-    reasons.append(f"final_cfg_source={cfg_source}")
+    reasons.append(f"final_v1_cfg_source={v1_source}")
     reasons.append(
-        "final_cfg "
-        f"xy={xy_abs_max_m:.3f} "
-        f"z=[{z_min_m:.3f},{z_max_m:.3f}] "
-        f"d={distance_max_m:.3f} "
-        f"v={rel_speed_max_mps:.3f} "
-        f"hold={hold_min_sec:.3f}"
+        "final_v1_cfg "
+        f"xy={v1_cfg['xy_abs_max_m']:.3f} "
+        f"z=[{v1_cfg['z_min_m']:.3f},{v1_cfg['z_max_m']:.3f}] "
+        f"d={v1_cfg['distance_max_m']:.3f} "
+        f"v={v1_cfg['rel_speed_max_mps']:.3f} "
+        f"hold={v1_cfg['hold_min_sec']:.3f}"
     )
+    reasons.append(f"final_v1_hold_sec={v1_hold_sec:.3f}")
+    reasons.append(f"final_loose_cfg_source={loose_source}")
+    reasons.append(
+        "final_loose_cfg "
+        f"xy={loose_cfg['xy_abs_max_m']:.3f} "
+        f"z=[{loose_cfg['z_min_m']:.3f},{loose_cfg['z_max_m']:.3f}] "
+        f"d={loose_cfg['distance_max_m']:.3f} "
+        f"v={loose_cfg['rel_speed_max_mps']:.3f} "
+        f"hold={loose_cfg['hold_min_sec']:.3f}"
+    )
+    reasons.append(f"final_loose_hold_sec={loose_hold_sec:.3f}")
     if final_phase != "COMPLETED":
         reasons.append(f"final_phase={final_phase or 'UNKNOWN'}")
-    reasons.append(f"final_hold_sec={hold_sec:.3f}")
     if _finite(final_abs_xy_max):
         reasons.append(f"final_abs_xy_max_m={final_abs_xy_max:.3f}")
     if _finite(final_rel_z):
@@ -273,7 +294,9 @@ def compute_final_pass_metrics(
 
     return {
         "final_pass": 1.0 if final_pass else 0.0,
-        "final_pass_hold_sec": hold_sec,
+        "final_pass_hold_sec": v1_hold_sec,
+        "final_pass_loose": 1.0 if final_pass_loose else 0.0,
+        "final_pass_hold_sec_loose": loose_hold_sec,
         "final_rel_x_m": final_rel_x,
         "final_rel_y_m": final_rel_y,
         "final_rel_z_m": final_rel_z,

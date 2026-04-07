@@ -691,14 +691,14 @@ def save_summary(rows, output_dir: Path, metadata):
     summary["mini_altitude_max_m"] = f"{max(r['mini_z'] for r in analysis_rows):.3f}" if analysis_rows else "0.0"
     summary["mini_altitude_final_m"] = f"{analysis_rows[-1]['mini_z']:.3f}" if analysis_rows else "0.0"
 
-    def _config_float(key: str, default: float) -> float:
-        value = str(metadata.get(key, "")).strip()
+    def _config_float(metadata_key: str, env_key: str, default: float) -> float:
+        value = str(metadata.get(metadata_key, "")).strip()
         if value:
             try:
                 return float(value)
             except ValueError:
                 pass
-        env_value = str(os.getenv(key.upper()) or "").strip()
+        env_value = str(os.getenv(env_key) or "").strip()
         if env_value:
             try:
                 return float(env_value)
@@ -706,38 +706,7 @@ def save_summary(rows, output_dir: Path, metadata):
                 pass
         return default
 
-    # FINAL_PASS: completed + tight terminal constraints + sustained hold.
-    if analysis_rows:
-        final_row = next((r for r in reversed(analysis_rows) if r["phase"] != "IDLE"), analysis_rows[-1])
-        final_rel_x = final_row.get("rel_x", math.nan)
-        final_rel_y = final_row.get("rel_y", math.nan)
-        final_rel_z = final_row.get("rel_z", math.nan)
-        final_rel_speed = measured_rel_speed(final_row)
-        final_abs_xy_max = (
-            max(abs(final_rel_x), abs(final_rel_y))
-            if math.isfinite(final_rel_x) and math.isfinite(final_rel_y)
-            else math.nan
-        )
-        summary["final_rel_x_m"] = f"{final_rel_x:.3f}" if math.isfinite(final_rel_x) else "nan"
-        summary["final_rel_y_m"] = f"{final_rel_y:.3f}" if math.isfinite(final_rel_y) else "nan"
-        summary["final_rel_z_m"] = f"{final_rel_z:.3f}" if math.isfinite(final_rel_z) else "nan"
-        summary["final_rel_speed_mps"] = f"{final_rel_speed:.3f}" if math.isfinite(final_rel_speed) else "nan"
-        summary["final_abs_xy_max_m"] = f"{final_abs_xy_max:.3f}" if math.isfinite(final_abs_xy_max) else "nan"
-
-        final_pass_xy_abs_max_m = _config_float("final_pass_xy_abs_max_m", 0.10)
-        final_pass_z_min_m = _config_float("final_pass_z_min_m", 0.15)
-        final_pass_z_max_m = _config_float("final_pass_z_max_m", 0.45)
-        final_pass_distance_max_m = _config_float("final_pass_distance_max_m", 0.30)
-        final_pass_rel_speed_max_mps = _config_float("final_pass_rel_speed_max_mps", 0.40)
-        final_pass_hold_min_sec = _config_float("final_pass_hold_min_sec", 0.30)
-        summary["final_pass_profile"] = str(metadata.get("final_pass_profile", os.getenv("FINAL_PASS_PROFILE", "v1")))
-        summary["final_pass_xy_abs_max_m_cfg"] = f"{final_pass_xy_abs_max_m:.3f}"
-        summary["final_pass_z_min_m_cfg"] = f"{final_pass_z_min_m:.3f}"
-        summary["final_pass_z_max_m_cfg"] = f"{final_pass_z_max_m:.3f}"
-        summary["final_pass_distance_max_m_cfg"] = f"{final_pass_distance_max_m:.3f}"
-        summary["final_pass_rel_speed_max_mps_cfg"] = f"{final_pass_rel_speed_max_mps:.3f}"
-        summary["final_pass_hold_min_sec_cfg"] = f"{final_pass_hold_min_sec:.3f}"
-
+    def _final_pass_hold(analysis_rows, cfg: dict[str, float]) -> float:
         best_hold = 0.0
         current_hold = 0.0
         last_t = math.nan
@@ -759,11 +728,11 @@ def save_summary(rows, output_dir: Path, metadata):
                 math.isfinite(rel_z) and
                 math.isfinite(distance) and
                 math.isfinite(rel_speed) and
-                abs(rel_x) <= final_pass_xy_abs_max_m and
-                abs(rel_y) <= final_pass_xy_abs_max_m and
-                final_pass_z_min_m <= rel_z <= final_pass_z_max_m and
-                distance <= final_pass_distance_max_m and
-                rel_speed <= final_pass_rel_speed_max_mps
+                abs(rel_x) <= cfg["xy_abs_max_m"] and
+                abs(rel_y) <= cfg["xy_abs_max_m"] and
+                cfg["z_min_m"] <= rel_z <= cfg["z_max_m"] and
+                distance <= cfg["distance_max_m"] and
+                rel_speed <= cfg["rel_speed_max_mps"]
             )
 
             if ok and last_ok and math.isfinite(last_t):
@@ -779,10 +748,78 @@ def save_summary(rows, output_dir: Path, metadata):
             last_t = t
             last_ok = ok
 
+        return best_hold
+
+    # FINAL_PASS: strict(v1) as final acceptance + loose as iteration gate.
+    if analysis_rows:
+        final_row = next((r for r in reversed(analysis_rows) if r["phase"] != "IDLE"), analysis_rows[-1])
+        final_rel_x = final_row.get("rel_x", math.nan)
+        final_rel_y = final_row.get("rel_y", math.nan)
+        final_rel_z = final_row.get("rel_z", math.nan)
+        final_rel_speed = measured_rel_speed(final_row)
+        final_abs_xy_max = (
+            max(abs(final_rel_x), abs(final_rel_y))
+            if math.isfinite(final_rel_x) and math.isfinite(final_rel_y)
+            else math.nan
+        )
+        summary["final_rel_x_m"] = f"{final_rel_x:.3f}" if math.isfinite(final_rel_x) else "nan"
+        summary["final_rel_y_m"] = f"{final_rel_y:.3f}" if math.isfinite(final_rel_y) else "nan"
+        summary["final_rel_z_m"] = f"{final_rel_z:.3f}" if math.isfinite(final_rel_z) else "nan"
+        summary["final_rel_speed_mps"] = f"{final_rel_speed:.3f}" if math.isfinite(final_rel_speed) else "nan"
+        summary["final_abs_xy_max_m"] = f"{final_abs_xy_max:.3f}" if math.isfinite(final_abs_xy_max) else "nan"
+
+        v1_cfg = {
+            "xy_abs_max_m": _config_float("final_pass_v1_xy_abs_max_m", "FINAL_PASS_V1_XY_ABS_MAX_M", 0.10),
+            "z_min_m": _config_float("final_pass_v1_z_min_m", "FINAL_PASS_V1_Z_MIN_M", 0.15),
+            "z_max_m": _config_float("final_pass_v1_z_max_m", "FINAL_PASS_V1_Z_MAX_M", 0.45),
+            "distance_max_m": _config_float("final_pass_v1_distance_max_m", "FINAL_PASS_V1_DISTANCE_MAX_M", 0.30),
+            "rel_speed_max_mps": _config_float("final_pass_v1_rel_speed_max_mps", "FINAL_PASS_V1_REL_SPEED_MAX_MPS", 0.40),
+            "hold_min_sec": _config_float("final_pass_v1_hold_min_sec", "FINAL_PASS_V1_HOLD_MIN_SEC", 0.30),
+        }
+        loose_cfg = {
+            "xy_abs_max_m": _config_float("final_pass_loose_xy_abs_max_m", "FINAL_PASS_LOOSE_XY_ABS_MAX_M", 0.15),
+            "z_min_m": _config_float("final_pass_loose_z_min_m", "FINAL_PASS_LOOSE_Z_MIN_M", 0.15),
+            "z_max_m": _config_float("final_pass_loose_z_max_m", "FINAL_PASS_LOOSE_Z_MAX_M", 0.55),
+            "distance_max_m": _config_float("final_pass_loose_distance_max_m", "FINAL_PASS_LOOSE_DISTANCE_MAX_M", 0.40),
+            "rel_speed_max_mps": _config_float("final_pass_loose_rel_speed_max_mps", "FINAL_PASS_LOOSE_REL_SPEED_MAX_MPS", 0.60),
+            "hold_min_sec": _config_float("final_pass_loose_hold_min_sec", "FINAL_PASS_LOOSE_HOLD_MIN_SEC", 0.30),
+        }
+
+        summary["final_pass_v1_xy_abs_max_m_cfg"] = f"{v1_cfg['xy_abs_max_m']:.3f}"
+        summary["final_pass_v1_z_min_m_cfg"] = f"{v1_cfg['z_min_m']:.3f}"
+        summary["final_pass_v1_z_max_m_cfg"] = f"{v1_cfg['z_max_m']:.3f}"
+        summary["final_pass_v1_distance_max_m_cfg"] = f"{v1_cfg['distance_max_m']:.3f}"
+        summary["final_pass_v1_rel_speed_max_mps_cfg"] = f"{v1_cfg['rel_speed_max_mps']:.3f}"
+        summary["final_pass_v1_hold_min_sec_cfg"] = f"{v1_cfg['hold_min_sec']:.3f}"
+        summary["final_pass_loose_xy_abs_max_m_cfg"] = f"{loose_cfg['xy_abs_max_m']:.3f}"
+        summary["final_pass_loose_z_min_m_cfg"] = f"{loose_cfg['z_min_m']:.3f}"
+        summary["final_pass_loose_z_max_m_cfg"] = f"{loose_cfg['z_max_m']:.3f}"
+        summary["final_pass_loose_distance_max_m_cfg"] = f"{loose_cfg['distance_max_m']:.3f}"
+        summary["final_pass_loose_rel_speed_max_mps_cfg"] = f"{loose_cfg['rel_speed_max_mps']:.3f}"
+        summary["final_pass_loose_hold_min_sec_cfg"] = f"{loose_cfg['hold_min_sec']:.3f}"
+
         final_phase = analysis_rows[-1]["phase"]
-        final_pass = final_phase == "COMPLETED" and best_hold >= final_pass_hold_min_sec
-        summary["final_pass_hold_sec"] = f"{best_hold:.3f}"
-        summary["final_pass"] = "1" if final_pass else "0"
+
+        v1_hold = _final_pass_hold(analysis_rows, v1_cfg)
+        v1_pass = final_phase == "COMPLETED" and v1_hold >= v1_cfg["hold_min_sec"]
+        summary["final_pass_v1_hold_sec"] = f"{v1_hold:.3f}"
+        summary["final_pass_v1"] = "1" if v1_pass else "0"
+
+        loose_hold = _final_pass_hold(analysis_rows, loose_cfg)
+        loose_pass = final_phase == "COMPLETED" and loose_hold >= loose_cfg["hold_min_sec"]
+        summary["final_pass_loose_hold_sec"] = f"{loose_hold:.3f}"
+        summary["final_pass_loose"] = "1" if loose_pass else "0"
+
+        # Backward-compatible aliases: final_pass == strict(v1).
+        summary["final_pass_profile"] = "v1"
+        summary["final_pass_xy_abs_max_m_cfg"] = summary["final_pass_v1_xy_abs_max_m_cfg"]
+        summary["final_pass_z_min_m_cfg"] = summary["final_pass_v1_z_min_m_cfg"]
+        summary["final_pass_z_max_m_cfg"] = summary["final_pass_v1_z_max_m_cfg"]
+        summary["final_pass_distance_max_m_cfg"] = summary["final_pass_v1_distance_max_m_cfg"]
+        summary["final_pass_rel_speed_max_mps_cfg"] = summary["final_pass_v1_rel_speed_max_mps_cfg"]
+        summary["final_pass_hold_min_sec_cfg"] = summary["final_pass_v1_hold_min_sec_cfg"]
+        summary["final_pass_hold_sec"] = summary["final_pass_v1_hold_sec"]
+        summary["final_pass"] = summary["final_pass_v1"]
     if "mini_tecs_underspeed_ratio" in analysis_rows[0]:
         underspeed_values = finite_values(analysis_rows, "mini_tecs_underspeed_ratio")
         if underspeed_values:
