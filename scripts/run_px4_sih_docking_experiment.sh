@@ -350,6 +350,13 @@ auto_start_relative_distance_max_m=${AUTO_START_RELATIVE_DISTANCE_MAX_M}
 auto_start_relative_speed_min_mps=${AUTO_START_RELATIVE_SPEED_MIN_MPS}
 auto_start_window_hold_count=${AUTO_START_WINDOW_HOLD_COUNT}
 auto_start_fallback_immediate=${AUTO_START_FALLBACK_IMMEDIATE}
+final_pass_profile=${FINAL_PASS_PROFILE:-v1}
+final_pass_xy_abs_max_m=${FINAL_PASS_XY_ABS_MAX_M:-0.10}
+final_pass_z_min_m=${FINAL_PASS_Z_MIN_M:-0.15}
+final_pass_z_max_m=${FINAL_PASS_Z_MAX_M:-0.45}
+final_pass_distance_max_m=${FINAL_PASS_DISTANCE_MAX_M:-0.30}
+final_pass_rel_speed_max_mps=${FINAL_PASS_REL_SPEED_MAX_MPS:-0.40}
+final_pass_hold_min_sec=${FINAL_PASS_HOLD_MIN_SEC:-0.30}
 EOF
 }
 

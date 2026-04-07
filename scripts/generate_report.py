@@ -2,6 +2,7 @@
 
 import csv
 import math
+import os
 import re
 import sys
 from collections import defaultdict
@@ -690,7 +691,22 @@ def save_summary(rows, output_dir: Path, metadata):
     summary["mini_altitude_max_m"] = f"{max(r['mini_z'] for r in analysis_rows):.3f}" if analysis_rows else "0.0"
     summary["mini_altitude_final_m"] = f"{analysis_rows[-1]['mini_z']:.3f}" if analysis_rows else "0.0"
 
-    # FINAL_PASS (initial definition): completed + tight terminal constraints + sustained hold.
+    def _config_float(key: str, default: float) -> float:
+        value = str(metadata.get(key, "")).strip()
+        if value:
+            try:
+                return float(value)
+            except ValueError:
+                pass
+        env_value = str(os.getenv(key.upper()) or "").strip()
+        if env_value:
+            try:
+                return float(env_value)
+            except ValueError:
+                pass
+        return default
+
+    # FINAL_PASS: completed + tight terminal constraints + sustained hold.
     if analysis_rows:
         final_row = next((r for r in reversed(analysis_rows) if r["phase"] != "IDLE"), analysis_rows[-1])
         final_rel_x = final_row.get("rel_x", math.nan)
@@ -708,12 +724,19 @@ def save_summary(rows, output_dir: Path, metadata):
         summary["final_rel_speed_mps"] = f"{final_rel_speed:.3f}" if math.isfinite(final_rel_speed) else "nan"
         summary["final_abs_xy_max_m"] = f"{final_abs_xy_max:.3f}" if math.isfinite(final_abs_xy_max) else "nan"
 
-        final_pass_xy_abs_max_m = 0.10
-        final_pass_z_min_m = 0.15
-        final_pass_z_max_m = 0.45
-        final_pass_distance_max_m = 0.30
-        final_pass_rel_speed_max_mps = 0.40
-        final_pass_hold_min_sec = 0.30
+        final_pass_xy_abs_max_m = _config_float("final_pass_xy_abs_max_m", 0.10)
+        final_pass_z_min_m = _config_float("final_pass_z_min_m", 0.15)
+        final_pass_z_max_m = _config_float("final_pass_z_max_m", 0.45)
+        final_pass_distance_max_m = _config_float("final_pass_distance_max_m", 0.30)
+        final_pass_rel_speed_max_mps = _config_float("final_pass_rel_speed_max_mps", 0.40)
+        final_pass_hold_min_sec = _config_float("final_pass_hold_min_sec", 0.30)
+        summary["final_pass_profile"] = str(metadata.get("final_pass_profile", os.getenv("FINAL_PASS_PROFILE", "v1")))
+        summary["final_pass_xy_abs_max_m_cfg"] = f"{final_pass_xy_abs_max_m:.3f}"
+        summary["final_pass_z_min_m_cfg"] = f"{final_pass_z_min_m:.3f}"
+        summary["final_pass_z_max_m_cfg"] = f"{final_pass_z_max_m:.3f}"
+        summary["final_pass_distance_max_m_cfg"] = f"{final_pass_distance_max_m:.3f}"
+        summary["final_pass_rel_speed_max_mps_cfg"] = f"{final_pass_rel_speed_max_mps:.3f}"
+        summary["final_pass_hold_min_sec_cfg"] = f"{final_pass_hold_min_sec:.3f}"
 
         best_hold = 0.0
         current_hold = 0.0

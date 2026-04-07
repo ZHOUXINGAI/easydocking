@@ -25,6 +25,16 @@ Goal: avoid “M3 pass but not truly docked”. Make FINAL_PASS explicit and mea
   - `relative_speed <= 0.40m/s`
   - Sustained for `>= 0.30s`
 
+**How to configure thresholds**
+- Environment variables (override defaults / profile):
+  - `FINAL_PASS_PROFILE` (`v1` or `loose`)
+  - `FINAL_PASS_XY_ABS_MAX_M`
+  - `FINAL_PASS_Z_MIN_M`, `FINAL_PASS_Z_MAX_M`
+  - `FINAL_PASS_DISTANCE_MAX_M`
+  - `FINAL_PASS_REL_SPEED_MAX_MPS`
+  - `FINAL_PASS_HOLD_MIN_SEC`
+- `scripts/run_px4_sih_docking_experiment.sh` writes these into each run’s `metadata.txt` as `final_pass_*` for reproducibility.
+
 **Tasks**
 - [x] Add `FINAL_PASS` metrics to per-run `summary.txt` / report
 - [x] Add `final_pass` + supporting columns to `results/px4_sih_batch_summary.csv`
