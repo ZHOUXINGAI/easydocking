@@ -1,0 +1,6 @@
+run_id,classification,final_pass,first_non_idle_t_sec,ahead_ratio_positive_pre_completed,ahead_min_m,ahead_sign_flip_count,tracking_ratio_positive,tracking_min_m,docking_ratio_positive,docking_min_m
+20260412_135552_px4_sih,final-pass,1,78.90,0.956,-0.398,3,1.000,0.332,0.708,-0.398
+20260412_135837_px4_sih,final-pass,1,78.54,0.964,-0.779,1,1.000,0.676,0.800,-0.779
+20260412_140124_px4_sih,final-pass,1,75.44,0.853,-1.226,6,0.308,-1.226,0.749,-1.079
+20260412_140414_px4_sih,final-pass,1,76.30,1.000,0.179,0,1.000,0.436,1.000,0.179
+20260412_140653_px4_sih,final-pass,1,78.84,0.826,-1.328,11,0.632,-0.643,0.582,-1.328

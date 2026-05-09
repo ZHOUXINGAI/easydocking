@@ -1,0 +1,6 @@
+run_id,phase_end,final_pass,first_tracking_t_sec,first_docking_t_sec,first_completed_t_sec,close_release_dist,history_fallback,straight_sec,dock_to_completed_sec,docking_ahead_ratio,docking_ahead_min_m,docking_neg_sec
+20260415_161123_px4_sih,COMPLETED,1.000000,83.000000,91.040000,97.700000,12.429000,True,9.480000,6.660000,0.834586,-0.451768,1.320000
+20260415_161355_px4_sih,TRACKING,0.000000,83.040000,,,14.809000,True,0.000000,,,,
+20260415_161747_px4_sih,IDLE,0.000000,,,,,False,0.000000,,,,
+20260415_161825_px4_sih,TRACKING,0.000000,83.200000,,,14.916000,True,0.000000,,,,
+20260415_162217_px4_sih,TRACKING,0.000000,83.040000,92.080000,,14.180000,True,70.360000,,1.000000,0.724971,0.000000

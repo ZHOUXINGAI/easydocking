@@ -1,0 +1,6 @@
+run_index,run_dir,classification,final_pass,final_abs_xy_max_m,final_v1_hold_sec,docking_along_negative_ratio,docking_along_min,signed_plot_present
+1,/home/hw/easydocking/results/20260409_172330_px4_sih,completed-but-not-final,0,0.061,0.24,0.0,0.487914,1
+2,/home/hw/easydocking/results/20260409_172536_px4_sih,final-pass,1,0.112,0.6,0.0,0.346365,1
+3,/home/hw/easydocking/results/20260409_172736_px4_sih,geometry-fail,0,1.955,0.0,0.0,0.380756,1
+4,/home/hw/easydocking/results/20260409_173056_px4_sih,final-pass,1,0.0,0.4,0.0,0.212847,1
+5,/home/hw/easydocking/results/20260409_173259_px4_sih,final-pass,1,0.0,0.54,0.0,0.196698,1

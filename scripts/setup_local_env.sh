@@ -9,6 +9,8 @@ PX4_DIR="/home/hw/PX4-Autopilot"
 
 if [ -f /opt/ros/jazzy/setup.bash ]; then
   source /opt/ros/jazzy/setup.bash
+elif [ -f /opt/ros/humble/setup.bash ]; then
+  source /opt/ros/humble/setup.bash
 fi
 
 if [ -f "$EASYDOCKING_SETUP" ]; then

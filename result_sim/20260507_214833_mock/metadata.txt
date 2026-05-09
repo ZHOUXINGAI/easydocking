@@ -1,0 +1,7 @@
+reason=completed
+rows=1267
+phase=COMPLETED
+completed_rows=13
+post_completed_settle_sec=0.600
+post_completed_rows=12
+csv=/home/hw/easydocking/result_sim/20260507_214833_mock/docking_log.csv

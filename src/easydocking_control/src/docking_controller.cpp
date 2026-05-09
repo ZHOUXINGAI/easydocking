@@ -2,6 +2,7 @@
 #include "easydocking_control/relative_estimator.hpp"
 #include "easydocking_control/guidance_law.hpp"
 #include "easydocking_control/backstepping_controller.hpp"
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <limits>
@@ -99,6 +100,14 @@ DockingController::DockingController()
     corridor_release_score_filtered_(0.0),
     corridor_release_armed_(false),
     corridor_release_accept_counter_(0),
+    corridor_plan_valid_(false),
+    corridor_plan_published_(false),
+    corridor_tangent_point_(Eigen::Vector3d::Zero()),
+    corridor_carrier_target_(Eigen::Vector3d::Zero()),
+    corridor_tangent_dir_(Eigen::Vector3d::Zero()),
+    corridor_hold_duration_(0.0),
+    corridor_planned_speed_(0.0),
+    corridor_mini_arrival_delay_(0.0),
     carrier_approach_speed_limit_(3.0),
     carrier_tracking_speed_limit_(2.2),
     carrier_docking_speed_limit_(1.0),
@@ -120,7 +129,16 @@ DockingController::DockingController()
     terminal_z_hold_counter_(0),
     terminal_z_out_counter_(0),
     terminal_lat_hold_latch_counter_(0),
-    tracking_lat_hold_counter_(0)
+    tracking_lat_hold_counter_(0),
+    departure_hold_active_(false),
+    departure_hold_completed_(false),
+    approach_hold_counter_(0),
+    carrier_departure_min_orbit_fraction_(0.35),
+    mini_orbit_radius_(0.0),
+    mini_orbit_speed_(0.0),
+    mini_orbit_center_(Eigen::Vector3d::Zero()),
+    approach_direction_locked_(false),
+    primary_approach_tangent_(Eigen::Vector3d::Zero())
 {
   controller_debug_.fill(std::numeric_limits<double>::quiet_NaN());
 
@@ -200,6 +218,18 @@ void DockingController::setDockingSpeedThreshold(double threshold)
   docking_speed_threshold_ = threshold;
 }
 
+void DockingController::setMiniOrbitModel(double radius, double speed, const Eigen::Vector3d & center)
+{
+  mini_orbit_radius_ = radius;
+  mini_orbit_speed_ = speed;
+  mini_orbit_center_ = center;
+}
+
+void DockingController::setCarrierDepartureMinOrbitFraction(double fraction)
+{
+  carrier_departure_min_orbit_fraction_ = fraction;
+}
+
 void DockingController::updatePoses(const geometry_msgs::msg::Pose& carrier_pose,
                                    const geometry_msgs::msg::Twist& carrier_twist,
                                    const geometry_msgs::msg::Pose& mini_pose,
@@ -242,6 +272,28 @@ void DockingController::startDocking()
   corridor_release_score_filtered_ = 0.0;
   corridor_release_armed_ = false;
   corridor_release_accept_counter_ = 0;
+  corridor_plan_valid_ = false;
+  corridor_plan_published_ = false;
+  corridor_tangent_point_.setZero();
+  corridor_carrier_target_.setZero();
+  corridor_tangent_dir_.setZero();
+  corridor_hold_duration_ = 0.0;
+  corridor_planned_speed_ = 0.0;
+  corridor_traj_start_.setZero();
+  corridor_traj_end_.setZero();
+  corridor_traj_duration_ = 0.0;
+  corridor_traj_start_time_ = 0.0;
+  corridor_traj_active_ = false;
+  corridor_traj_counter_ = 0;
+  corridor_arc_center_.setZero();
+  corridor_arc_radius_ = 0.0;
+  corridor_arc_phi_start_ = 0.0;
+  corridor_arc_delta_phi_ = 0.0;
+  departure_hold_active_ = false;
+  departure_hold_completed_ = false;
+  approach_hold_counter_ = 0;
+  approach_direction_locked_ = false;
+  primary_approach_tangent_.setZero();
   controller_debug_.fill(std::numeric_limits<double>::quiet_NaN());
   carrier_velocity_limited_initialized_ = false;
   carrier_velocity_limited_.setZero();
@@ -273,6 +325,28 @@ void DockingController::stopDocking()
   corridor_release_score_filtered_ = 0.0;
   corridor_release_armed_ = false;
   corridor_release_accept_counter_ = 0;
+  corridor_plan_valid_ = false;
+  corridor_plan_published_ = false;
+  corridor_tangent_point_.setZero();
+  corridor_carrier_target_.setZero();
+  corridor_tangent_dir_.setZero();
+  corridor_hold_duration_ = 0.0;
+  corridor_planned_speed_ = 0.0;
+  corridor_traj_start_.setZero();
+  corridor_traj_end_.setZero();
+  corridor_traj_duration_ = 0.0;
+  corridor_traj_start_time_ = 0.0;
+  corridor_traj_active_ = false;
+  corridor_traj_counter_ = 0;
+  corridor_arc_center_.setZero();
+  corridor_arc_radius_ = 0.0;
+  corridor_arc_phi_start_ = 0.0;
+  corridor_arc_delta_phi_ = 0.0;
+  departure_hold_active_ = false;
+  departure_hold_completed_ = false;
+  approach_hold_counter_ = 0;
+  approach_direction_locked_ = false;
+  primary_approach_tangent_.setZero();
   controller_debug_.fill(std::numeric_limits<double>::quiet_NaN());
   carrier_velocity_limited_initialized_ = false;
   carrier_velocity_limited_.setZero();
@@ -303,6 +377,28 @@ void DockingController::reset()
   corridor_release_score_filtered_ = 0.0;
   corridor_release_armed_ = false;
   corridor_release_accept_counter_ = 0;
+  corridor_plan_valid_ = false;
+  corridor_plan_published_ = false;
+  corridor_tangent_point_.setZero();
+  corridor_carrier_target_.setZero();
+  corridor_tangent_dir_.setZero();
+  corridor_hold_duration_ = 0.0;
+  corridor_planned_speed_ = 0.0;
+  corridor_traj_start_.setZero();
+  corridor_traj_end_.setZero();
+  corridor_traj_duration_ = 0.0;
+  corridor_traj_start_time_ = 0.0;
+  corridor_traj_active_ = false;
+  corridor_traj_counter_ = 0;
+  corridor_arc_center_.setZero();
+  corridor_arc_radius_ = 0.0;
+  corridor_arc_phi_start_ = 0.0;
+  corridor_arc_delta_phi_ = 0.0;
+  departure_hold_active_ = false;
+  departure_hold_completed_ = false;
+  approach_hold_counter_ = 0;
+  approach_direction_locked_ = false;
+  primary_approach_tangent_.setZero();
   controller_debug_.fill(std::numeric_limits<double>::quiet_NaN());
   carrier_velocity_limited_initialized_ = false;
   carrier_velocity_limited_.setZero();
@@ -369,7 +465,9 @@ void DockingController::computeControlCommands(geometry_msgs::msg::Twist& carrie
       dockingPhaseControl(carrier_cmd, mini_cmd);
       break;
     case DockingPhase::COMPLETED:
-      if (passive_target_mode_) {
+      if (corridor_plan_valid_) {
+        approachPhaseControl(carrier_cmd, mini_cmd);
+      } else if (passive_target_mode_) {
         dockingPhaseControl(carrier_cmd, mini_cmd);
       } else {
         carrier_cmd = geometry_msgs::msg::Twist();
@@ -427,6 +525,9 @@ void DockingController::estimateRelativePose()
 
 void DockingController::transitionPhase()
 {
+  // Corridor plan active — trajectory handles everything
+  if (corridor_plan_valid_) return;
+
   double distance = relative_estimator_->getRelativeDistance();
   const Eigen::Vector3d relative_position = relative_estimator_->getRelativePosition();
   const Eigen::Vector3d relative_velocity = relative_estimator_->getRelativeVelocity();
@@ -1017,6 +1118,115 @@ void DockingController::takeoffPhaseControl(
   mini_position_setpoint_.z() = idle_hover_altitude_;
 }
 
+void DockingController::computeCorridorPlan()
+{
+	// Time-parameterized trajectory: P(t) = C + (t / t_mini) * (T - C)
+	// The carrier follows this trajectory from start position to the tangent
+	// point T on the mini's orbit, arriving exactly when the mini does.
+	// No hold, no waiting, no speed clamping — the trajectory IS the plan.
+
+	const Eigen::Vector3d carrier_pos = poseToEigen(carrier_pose_);
+	const Eigen::Vector3d mini_pos = poseToEigen(mini_pose_);
+
+	if (mini_orbit_radius_ < 0.01 || mini_orbit_speed_ < 0.01) {
+		corridor_plan_valid_ = false;
+		return;
+	}
+
+	const double R = mini_orbit_radius_;
+	const double orbit_speed = mini_orbit_speed_;
+	const double omega = orbit_speed / R;
+	const Eigen::Vector2d O(mini_orbit_center_.x(), mini_orbit_center_.y());
+	const Eigen::Vector2d C(carrier_pos.x(), carrier_pos.y());
+	const Eigen::Vector2d M(mini_pos.x(), mini_pos.y());
+
+	const Eigen::Vector2d OC = C - O;
+	const double d_oc = OC.norm();
+
+	if (d_oc <= R * 1.001) {
+		corridor_plan_valid_ = false;
+		return;
+	}
+
+	// Geometric tangent points from C to orbit circle
+	const double alpha = std::atan2(OC.y(), OC.x());
+	const double beta = std::asin(R / d_oc);
+
+	const auto tang_dir = [](double theta) -> Eigen::Vector2d {
+		return Eigen::Vector2d(-std::sin(theta), std::cos(theta));
+	};
+
+	const double theta_1 = alpha + beta;
+	const double theta_2 = alpha - beta;
+	const Eigen::Vector2d T1 = O + R * Eigen::Vector2d(std::cos(theta_1), std::sin(theta_1));
+	const Eigen::Vector2d T2 = O + R * Eigen::Vector2d(std::cos(theta_2), std::sin(theta_2));
+	const double score_1 = (T1 - C).normalized().dot(tang_dir(theta_1));
+	const double score_2 = (T2 - C).normalized().dot(tang_dir(theta_2));
+
+	double theta_T = score_1 >= score_2 ? theta_1 : theta_2;
+	Eigen::Vector2d T = score_1 >= score_2 ? T1 : T2;
+	Eigen::Vector2d tang = tang_dir(theta_T);
+
+	// Mini timing to T
+	const double theta_m = std::atan2(M.y() - O.y(), M.x() - O.x());
+	double delta_theta = theta_T - theta_m;
+	if (delta_theta < 0.0) { delta_theta += 2.0 * M_PI; }
+	const double t_mini = delta_theta / omega;
+
+	// Circular arc trajectory: from C to T, tangent to mini's orbit at T.
+	// Arc center M_arc lies on the line O→T. Radius r satisfies |C-M|=|T-M|=r.
+	const Eigen::Vector2d u = (T - O).normalized();  // O→T unit vector
+	const double d = d_oc;
+	const double cos_alpha = OC.dot(T - O) / (d * R);
+	const double numer = d * d - R * R;
+	const double denom = 2.0 * R * (d * cos_alpha - R);
+	const double k = (std::abs(denom) > 0.01) ? (numer / denom) : 2.0;
+	const Eigen::Vector2d M_arc = O + k * (T - O);
+	const double r_arc = std::abs(k - 1.0) * R;
+
+	// Arc angles from M_arc to C and T
+	const double phi_start = std::atan2(C.y() - M_arc.y(), C.x() - M_arc.x());
+	const double phi_end   = std::atan2(T.y() - M_arc.y(), T.x() - M_arc.x());
+	// Shortest angular difference (signed)
+	double dphi = phi_end - phi_start;
+	while (dphi >  M_PI) { dphi -= 2.0 * M_PI; }
+	while (dphi < -M_PI) { dphi += 2.0 * M_PI; }
+	const double arc_len = r_arc * std::abs(dphi);
+
+	// Target Z: idle hover altitude (30m), must match mini orbit altitude
+	const double target_z = idle_hover_altitude_;
+	corridor_traj_start_ = Eigen::Vector3d(C.x(), C.y(), carrier_pos.z());
+	corridor_traj_end_   = Eigen::Vector3d(T.x(), T.y(), target_z);
+	corridor_traj_start_time_ = 0.0;
+	corridor_traj_active_ = false;
+
+	// Store arc parameters for trajectory tracking
+	corridor_arc_center_ = M_arc;
+	corridor_arc_radius_ = r_arc;
+	corridor_arc_phi_start_ = phi_start;
+	corridor_arc_delta_phi_ = dphi;
+
+	// Set arc speed to a natural value (not t_mini-matched).
+	// Carrier flies arc at consistent speed, then continues on tangent.
+	// Mini catches up from behind at its natural speed.
+	// Arc at 8 m/s. Hold at launch for timing: hold = t_mini - t_arc
+	const double arc_speed = 8.0;
+	corridor_traj_duration_ = arc_len / arc_speed;
+	corridor_planned_speed_ = arc_speed;
+	corridor_mini_arrival_delay_ = t_mini;
+	// Hold at launch so arc completes when mini reaches T
+	corridor_hold_duration_ = std::max(0.0, t_mini - corridor_traj_duration_);
+
+	double trigger_phase = theta_T;
+	while (trigger_phase < 0.0) { trigger_phase += 2.0 * M_PI; }
+	while (trigger_phase >= 2.0 * M_PI) { trigger_phase -= 2.0 * M_PI; }
+
+	corridor_tangent_point_ = Eigen::Vector3d(T.x(), T.y(), idle_hover_altitude_);
+	corridor_carrier_target_ = corridor_tangent_point_;
+	corridor_tangent_dir_ = Eigen::Vector3d(tang.x(), tang.y(), 0.0);
+	corridor_plan_valid_ = true;
+}
+
 void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_cmd,
                                             geometry_msgs::msg::Twist& mini_cmd)
 {
@@ -1039,6 +1249,105 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
   const double track_along_speed = horizontalOnly(relative_vel).dot(track_direction);
 
   if (passive_target_mode_) {
+    // Departure hold: carrier waits at idle position before starting approach.
+    // Hold duration is computed by computeCorridorPlan() — a deterministic rule
+    // based on tangent-intercept geometry, not a guessed fraction.
+    const Eigen::Vector3d carrier_pos = poseToEigen(carrier_pose_);
+    if (!departure_hold_completed_) {
+      if (!departure_hold_active_) {
+        departure_hold_active_ = true;
+        idle_carrier_hold_position_ = carrier_pos;
+        computeCorridorPlan();
+      }
+      ++approach_hold_counter_;
+      const double hold_duration = corridor_hold_duration_;
+      const double hold_time = approach_hold_counter_ / control_rate_;
+      if (hold_time < hold_duration) {
+        carrier_velocity_command_.setZero();
+        carrier_position_setpoint_ = idle_carrier_hold_position_;
+        mini_velocity_command_.setZero();
+        mini_position_setpoint_ = poseToEigen(mini_pose_);
+        carrier_cmd.linear.x = 0.0;
+        carrier_cmd.linear.y = 0.0;
+        carrier_cmd.linear.z = 0.0;
+        carrier_cmd.angular.z = 0.0;
+        mini_cmd.linear.x = 0.0;
+        mini_cmd.linear.y = 0.0;
+        mini_cmd.linear.z = 0.0;
+        mini_cmd.angular.z = 0.0;
+        return;
+      }
+      departure_hold_completed_ = true;
+      // Start the time-parameterized trajectory immediately (hold=0)
+      if (corridor_plan_valid_ && !corridor_traj_active_) {
+        corridor_traj_counter_ = 0;
+        corridor_traj_active_ = true;
+      }
+    }
+
+    // ── Corridor Plan Trajectory Tracking (circular arc) ──
+    // Arc from C to T, tangent to mini's orbit at T.
+    // P(φ) = M_arc + r * (cos φ, sin φ), φ = φ_start + frac * Δφ
+    if (corridor_plan_valid_ && corridor_traj_active_) {
+      ++corridor_traj_counter_;
+      const double elapsed = corridor_traj_counter_ / control_rate_;
+      const double frac = clampValue(elapsed / std::max(corridor_traj_duration_, 0.1), 0.0, 1.0);
+      const double phi = corridor_arc_phi_start_ + frac * corridor_arc_delta_phi_;
+      const double c = std::cos(phi);
+      const double s = std::sin(phi);
+      const Eigen::Vector2d pos_2d =
+        corridor_arc_center_ + corridor_arc_radius_ * Eigen::Vector2d(c, s);
+      // Tangent direction along the arc (derivative of position wrt φ, normalized)
+      const Eigen::Vector2d tang_2d =
+        (corridor_arc_delta_phi_ > 0.0)
+          ? Eigen::Vector2d(-s, c)
+          : Eigen::Vector2d(s, -c);
+      const double z_start = corridor_traj_start_.z();
+      const double z_end   = corridor_traj_end_.z();
+      const Eigen::Vector3d traj_pos(pos_2d.x(), pos_2d.y(),
+                                      z_start + frac * (z_end - z_start));
+      const Eigen::Vector3d traj_vel(
+        tang_2d.x() * corridor_planned_speed_,
+        tang_2d.y() * corridor_planned_speed_,
+        (z_end - z_start) / std::max(corridor_traj_duration_, 0.1));
+
+      carrier_position_setpoint_ = traj_pos;
+      carrier_velocity_command_ = traj_vel;
+      mini_velocity_command_.setZero();
+      mini_position_setpoint_ = poseToEigen(mini_pose_);
+
+      // Phase 2: formation flight 3s, then release for quick docking
+      if (frac >= 0.99) {
+        const double phase2_t = elapsed - corridor_traj_duration_;
+        carrier_position_setpoint_ =
+          corridor_traj_end_ + corridor_tangent_dir_ * 8.0 * phase2_t;
+        carrier_velocity_command_ = corridor_tangent_dir_ * 8.0;
+        if (phase2_t > 3.0) {
+          corridor_plan_valid_ = false;
+          current_phase_ = DockingPhase::COMPLETED;
+        }
+        carrier_cmd.linear.x = carrier_velocity_command_(0);
+        carrier_cmd.linear.y = carrier_velocity_command_(1);
+        carrier_cmd.linear.z = carrier_velocity_command_(2);
+        carrier_cmd.angular.z = 0.0;
+        mini_cmd.linear.x = 0.0;
+        mini_cmd.linear.y = 0.0;
+        mini_cmd.linear.z = 0.0;
+        mini_cmd.angular.z = 0.0;
+        return;
+      }
+
+      carrier_cmd.linear.x = carrier_velocity_command_(0);
+      carrier_cmd.linear.y = carrier_velocity_command_(1);
+      carrier_cmd.linear.z = carrier_velocity_command_(2);
+      carrier_cmd.angular.z = 0.0;
+      mini_cmd.linear.x = 0.0;
+      mini_cmd.linear.y = 0.0;
+      mini_cmd.linear.z = 0.0;
+      mini_cmd.angular.z = 0.0;
+      return;
+    }
+
     // Approach: explicit LOS/intercept guidance to pull lateral geometry in before close tracking.
     const double terminal_z_band_min = 0.25;
     const double terminal_z_band_max = 0.95;
@@ -1049,7 +1358,7 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         ? relative_pos.z() - terminal_z_band_max
         : 0.0);
     const double z_guard_blend = clampValue(z_out_of_band / 0.60, 0.0, 1.0);
-    const double approach_speed_cap =
+    double approach_speed_cap =
       (1.0 - z_guard_blend) * carrier_approach_speed_limit_ +
       z_guard_blend * std::min(0.45 * carrier_approach_speed_limit_, 4.0);
     const bool z_guard_freeze_along =
@@ -1060,11 +1369,13 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         1.4,
         approach_speed_cap);
     const double metric_distance = relative_pos.norm();
-    double closing_speed = pursuit_speed;
-    // When z is still far outside the evaluation band, avoid entering the <=10m window too early.
-    // Otherwise we can briefly get good lateral geometry while z is still wrong, and then drift
-    // back out of 10m before we ever accumulate the hold time.
-    if (z_out_of_band > 0.35) {
+    // When corridor plan is active, track the planned speed instead of
+    // using reactive pursuit. The plan already accounts for timing.
+    double closing_speed = corridor_plan_valid_
+      ? corridor_planned_speed_
+      : pursuit_speed;
+    // Skip standoff when corridor plan is active — planned speed handles timing.
+    if (!corridor_plan_valid_ && z_out_of_band > 0.35) {
       const double standoff_distance =
         10.5 + 4.0 * clampValue((z_out_of_band - 0.35) / 1.10, 0.0, 1.0);
       if (metric_distance < standoff_distance) {
@@ -1075,8 +1386,50 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           backoff_blend * 1.0;
       }
     }
-    const Eigen::Vector3d closing_velocity = los_direction * closing_speed;
-    Eigen::Vector3d intercept_velocity = target_velocity + closing_velocity;
+    // When corridor plan is valid, use the fixed tangent direction for
+    // macroscopic guidance — carrier flies toward the geometric tangent point
+    // instead of chasing the moving mini. This eliminates velocity reversal.
+    Eigen::Vector3d approach_direction;
+    if (corridor_plan_valid_) {
+      // Fly straight toward the ahead target on the tangent (carrier leads).
+      const Eigen::Vector3d to_target = corridor_carrier_target_ - carrier_pos;
+      approach_direction = to_target.norm() > 0.01
+        ? to_target.normalized()
+        : corridor_tangent_dir_;
+    } else {
+      approach_direction = los_direction;
+    }
+    // Invalidate corridor plan when mini is within transition range
+    if (corridor_plan_valid_ && relative_pos.norm() < approach_distance_ * 0.8) {
+      corridor_plan_valid_ = false;
+    }
+    const Eigen::Vector3d closing_velocity = approach_direction * closing_speed;
+    Eigen::Vector3d intercept_velocity = closing_velocity;
+    // Approach direction locking: only needed when corridor plan is not active.
+    // With a valid corridor plan, the direction is already fixed geometrically.
+    if (!corridor_plan_valid_ && departure_hold_completed_ && carrier_approach_speed_limit_ > 0.1) {
+      const Eigen::Vector3d h_cmd = horizontalOnly(intercept_velocity);
+      const double h_speed = h_cmd.norm();
+      if (!approach_direction_locked_ && h_speed > 0.5) {
+        primary_approach_tangent_ = h_cmd.normalized();
+        approach_direction_locked_ = true;
+      }
+      if (approach_direction_locked_ && h_speed > 0.5) {
+        const Eigen::Vector3d h_dir = h_cmd / h_speed;
+        const double dot = h_dir.dot(primary_approach_tangent_);
+        if (dot < 0.259) {
+          const double angle = std::acos(std::max(-1.0, std::min(1.0, dot)));
+          const double target_angle = 75.0 * M_PI / 180.0;
+          const double cross = h_dir.x() * primary_approach_tangent_.y()
+                            - h_dir.y() * primary_approach_tangent_.x();
+          const double rot = (cross > 0.0 ? 1.0 : -1.0) * (angle - target_angle);
+          const double c = std::cos(rot);
+          const double s = std::sin(rot);
+          intercept_velocity.x() = (h_dir.x() * c - h_dir.y() * s) * h_speed;
+          intercept_velocity.y() = (h_dir.x() * s + h_dir.y() * c) * h_speed;
+        }
+      }
+    }
     const double vertical_intercept_gain = 0.90 + 0.70 * z_guard_blend;
     const double vertical_intercept_limit = 1.4 + 1.2 * z_guard_blend;
     intercept_velocity.z() =
@@ -1087,8 +1440,15 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
 
     const double preview_horizon =
       clampValue(intercept_lookahead_ * 0.7 + 0.025 * distance, 0.8, 1.8);
-	    const Eigen::Vector3d intercept_position =
-	      poseToEigen(mini_pose_) + target_velocity * preview_horizon - desired_relative_position_;
+    // When corridor plan is valid, intercept_position is the fixed tangent point.
+    // Otherwise, fall back to chasing the mini with a preview horizon.
+    Eigen::Vector3d intercept_position;
+    if (corridor_plan_valid_) {
+      intercept_position = corridor_carrier_target_ - desired_relative_position_;
+    } else {
+      intercept_position = poseToEigen(mini_pose_) + target_velocity * preview_horizon
+                         - desired_relative_position_;
+    }
 	    const Eigen::Vector3d direct_position =
 	      poseToEigen(mini_pose_) - desired_relative_position_;
 
@@ -1114,7 +1474,12 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           (0.74 + 0.40 * z_guard_blend) * vertical_error - 0.24 * relative_vel.z(),
           -(1.60 + 1.00 * z_guard_blend),
           +(1.60 + 1.00 * z_guard_blend)));
-    Eigen::Vector3d desired_velocity = intercept_velocity + velocity_correction;
+    // When corridor plan is active, suppress velocity correction (PD) so the
+    // carrier tracks the planned speed exactly. Corrections would add extra
+    // speed and make the carrier arrive early.
+    Eigen::Vector3d desired_velocity = corridor_plan_valid_
+      ? intercept_velocity
+      : (intercept_velocity + velocity_correction);
     if (z_guard_freeze_along) {
       const double extra_along =
         (closing_velocity + velocity_correction).dot(track_direction);
@@ -1123,6 +1488,17 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
 	    carrier_velocity_command_ =
 	      clampNorm(desired_velocity - 0.08 * (carrier_velocity - target_velocity),
 	      carrier_approach_speed_limit_);
+	    // When corridor plan is active, enforce planned speed so the
+	    // carrier doesn't arrive at T early and have to wait.
+	    if (corridor_plan_valid_) {
+	      const double planned = corridor_planned_speed_;
+	      const double h_norm = horizontalOnly(carrier_velocity_command_).norm();
+	      if (h_norm > planned * 1.05) {
+	        const Eigen::Vector3d h_dir = horizontalOnly(carrier_velocity_command_).normalized();
+	        carrier_velocity_command_.x() = h_dir.x() * planned;
+	        carrier_velocity_command_.y() = h_dir.y() * planned;
+	      }
+	    }
 	    // Vertical dynamics dominate the z-band dwell time inside the <=10m window. Clamp the
 	    // vertical command in close range so we don't dive through the [0.25, 0.95] band too fast.
 	    if (metric_distance < 15.0) {

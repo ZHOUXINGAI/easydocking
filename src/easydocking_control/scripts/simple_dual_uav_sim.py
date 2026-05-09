@@ -4,7 +4,7 @@ import math
 from typing import Optional
 
 import rclpy
-from easydocking_msgs.msg import DockingStatus
+from easydocking_msgs.msg import CorridorPlan, DockingStatus
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -98,12 +98,17 @@ class SimpleDualUavSim(Node):
         self.terminal_straight_active = False
         self.terminal_direction = [1.0, 0.0]
         self.last_phase = "IDLE"
+        self._corridor_plan: Optional[CorridorPlan] = None
+        self._mini_glide_active = False
+        self._mini_glide_dir = [1.0, 0.0]
+        self._mini_glide_speed = 3.0
 
         self.create_subscription(PoseStamped, "/carrier/setpoint/pose", self._carrier_pose_cb, 10)
         self.create_subscription(PoseStamped, "/mini/setpoint/pose", self._mini_pose_cb, 10)
         self.create_subscription(TwistStamped, "/carrier/setpoint/velocity", self._carrier_vel_cb, 10)
         self.create_subscription(TwistStamped, "/mini/setpoint/velocity", self._mini_vel_cb, 10)
         self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
+        self.create_subscription(CorridorPlan, "/docking/corridor_plan", self._corridor_plan_cb, 10)
 
         self.carrier_pub = self.create_publisher(Odometry, "/carrier/odom", 10)
         self.mini_pub = self.create_publisher(Odometry, "/mini/odom", 10)
@@ -144,6 +149,13 @@ class SimpleDualUavSim(Node):
         if self.docking_phase not in {"DOCKING", "COMPLETED"} and self.last_phase == "DOCKING":
             self.terminal_straight_active = False
         self.last_phase = self.docking_phase
+
+    def _corridor_plan_cb(self, msg: CorridorPlan) -> None:
+        if msg.corridor_valid:
+            self._corridor_plan = msg
+            self._mini_glide_active = False
+            self._mini_glide_dir = [msg.tangent_dir_x, msg.tangent_dir_y]
+            self._mini_glide_speed = 8.0
 
     def _step(self) -> None:
         self.sim_time += self.dt
@@ -229,6 +241,12 @@ class SimpleDualUavSim(Node):
             self._update_attached_mini()
             return
 
+        # CorridorPlan glide: switch to straight flight along tangent at trigger time
+        if self._corridor_plan is not None and not self._mini_glide_active:
+            now_sec = self.get_clock().now().nanoseconds / 1e9
+            if now_sec >= self._corridor_plan.mini_arrival_time:
+                self._mini_glide_active = True
+
         target_speed = self._compute_mini_target_speed()
         dx = pos[0] - cx
         dy = pos[1] - cy
@@ -251,7 +269,15 @@ class SimpleDualUavSim(Node):
                 self.terminal_direction = [self.mini_vel[0] / speed_xy, self.mini_vel[1] / speed_xy]
             self.terminal_straight_active = True
 
-        if self.terminal_straight_active and self.docking_phase in {"DOCKING", "COMPLETED"}:
+        if self._mini_glide_active:
+            # Fly straight along the corridor tangent (CorridorPlan glide)
+            gx, gy = self._mini_glide_dir
+            commanded_vel = [
+                gx * self._mini_glide_speed,
+                gy * self._mini_glide_speed,
+                max(min((cz - pos[2]) * 0.8, climb_rate_limit), -0.8),
+            ]
+        elif self.terminal_straight_active and self.docking_phase in {"DOCKING", "COMPLETED"}:
             commanded_vel = [
                 self.terminal_direction[0] * target_speed,
                 self.terminal_direction[1] * target_speed,
@@ -333,8 +359,11 @@ class SimpleDualUavSim(Node):
         return max(self.mini_capture_speed, target_speed)
 
     def _should_attach(self) -> bool:
-        if self.docking_phase == "COMPLETED":
-            return True
+        # Corridor plan active — never attach (dynamic docking)
+        if self._corridor_plan is not None:
+            now_sec = self.get_clock().now().nanoseconds / 1e9
+            if now_sec >= self._corridor_plan.mini_arrival_time:
+                return False
         return (
             self.docking_phase == "DOCKING" and
             math.isfinite(self.relative_distance) and

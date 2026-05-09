@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 
 # Generate interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/CorridorPlan.msg
   msg/DockingCommand.msg
   msg/DockingStatus.msg
   msg/RelativePose.msg

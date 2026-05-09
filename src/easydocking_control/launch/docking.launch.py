@@ -20,7 +20,54 @@ def _launch_setup(context, *args, **kwargs):
     use_mock_sim = LaunchConfiguration("use_mock_sim")
     use_px4_odom_bridge = LaunchConfiguration("use_px4_odom_bridge")
     carrier_activate_on_launch = LaunchConfiguration("carrier_activate_on_launch")
+    carrier_idle_hover_altitude = LaunchConfiguration("carrier_idle_hover_altitude")
     carrier_use_position_setpoint = LaunchConfiguration("carrier_use_position_setpoint")
+    carrier_same_direction_guard_enabled = LaunchConfiguration("carrier_same_direction_guard_enabled")
+    carrier_same_direction_guard_reverse_threshold_mps = _as_float(
+        context, "carrier_same_direction_guard_reverse_threshold_mps"
+    )
+    carrier_same_direction_guard_release_forward_mps = _as_float(
+        context, "carrier_same_direction_guard_release_forward_mps"
+    )
+    carrier_same_direction_guard_min_forward_command_mps = _as_float(
+        context, "carrier_same_direction_guard_min_forward_command_mps"
+    )
+    carrier_same_direction_guard_force_min_forward_command_mps = _as_float(
+        context, "carrier_same_direction_guard_force_min_forward_command_mps"
+    )
+    carrier_same_direction_guard_max_lateral_command_mps = _as_float(
+        context, "carrier_same_direction_guard_max_lateral_command_mps"
+    )
+    carrier_same_direction_guard_force_duration_sec = _as_float(
+        context, "carrier_same_direction_guard_force_duration_sec"
+    )
+    carrier_same_direction_guard_predictive_lead_enabled = LaunchConfiguration(
+        "carrier_same_direction_guard_predictive_lead_enabled"
+    )
+    carrier_same_direction_guard_predictive_adaptive_horizon_enabled = LaunchConfiguration(
+        "carrier_same_direction_guard_predictive_adaptive_horizon_enabled"
+    )
+    carrier_same_direction_guard_predictive_min_horizon_sec = _as_float(
+        context, "carrier_same_direction_guard_predictive_min_horizon_sec"
+    )
+    carrier_same_direction_guard_predictive_horizon_sec = _as_float(
+        context, "carrier_same_direction_guard_predictive_horizon_sec"
+    )
+    carrier_same_direction_guard_predictive_horizon_gain = _as_float(
+        context, "carrier_same_direction_guard_predictive_horizon_gain"
+    )
+    carrier_same_direction_guard_predictive_use_acceleration = LaunchConfiguration(
+        "carrier_same_direction_guard_predictive_use_acceleration"
+    )
+    carrier_same_direction_guard_predictive_max_accel_mps2 = _as_float(
+        context, "carrier_same_direction_guard_predictive_max_accel_mps2"
+    )
+    carrier_same_direction_guard_predictive_accel_filter_alpha = _as_float(
+        context, "carrier_same_direction_guard_predictive_accel_filter_alpha"
+    )
+    carrier_same_direction_guard_predictive_tangent_weight = _as_float(
+        context, "carrier_same_direction_guard_predictive_tangent_weight"
+    )
     mini_use_offboard_orbit_hold = LaunchConfiguration("mini_use_offboard_orbit_hold")
     mini_orbit_hold_ready_altitude = LaunchConfiguration("mini_orbit_hold_ready_altitude")
     mini_orbit_hold_enable_delay_sec = LaunchConfiguration("mini_orbit_hold_enable_delay_sec")
@@ -29,6 +76,44 @@ def _launch_setup(context, *args, **kwargs):
     carrier_approach_speed_limit = _as_float(context, "carrier_approach_speed_limit")
     carrier_tracking_speed_limit = _as_float(context, "carrier_tracking_speed_limit")
     carrier_docking_speed_limit = _as_float(context, "carrier_docking_speed_limit")
+    global_intercept_enabled = LaunchConfiguration("global_intercept_enabled")
+    global_intercept_horizon_min_sec = _as_float(context, "global_intercept_horizon_min_sec")
+    global_intercept_horizon_max_sec = _as_float(context, "global_intercept_horizon_max_sec")
+    global_intercept_horizon_step_sec = _as_float(context, "global_intercept_horizon_step_sec")
+    global_intercept_lead_distance_min_m = _as_float(context, "global_intercept_lead_distance_min_m")
+    global_intercept_lead_distance_max_m = _as_float(context, "global_intercept_lead_distance_max_m")
+    global_intercept_route_min_forward_cos = _as_float(context, "global_intercept_route_min_forward_cos")
+    global_intercept_path_weight = _as_float(context, "global_intercept_path_weight")
+    global_intercept_alignment_weight = _as_float(context, "global_intercept_alignment_weight")
+    global_intercept_time_weight = _as_float(context, "global_intercept_time_weight")
+    tracking_entry_rearm_guard_enabled = LaunchConfiguration("tracking_entry_rearm_guard_enabled")
+    carrier_front_fail_abort_enabled = LaunchConfiguration("carrier_front_fail_abort_enabled")
+    carrier_front_fail_threshold_sec = LaunchConfiguration("carrier_front_fail_threshold_sec")
+    carrier_front_fail_along_tolerance_m = LaunchConfiguration("carrier_front_fail_along_tolerance_m")
+    tracking_entry_rearm_guard_branch_a_window_sec = _as_float(
+        context, "tracking_entry_rearm_guard_branch_a_window_sec"
+    )
+    tracking_entry_rearm_guard_branch_a_min_terminal_distance_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_a_min_terminal_distance_m"
+    )
+    tracking_entry_rearm_guard_branch_a_min_lateral_abs_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_a_min_lateral_abs_m"
+    )
+    tracking_entry_rearm_guard_branch_a_max_along_error_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_a_max_along_error_m"
+    )
+    tracking_entry_rearm_guard_branch_b_window_sec = _as_float(
+        context, "tracking_entry_rearm_guard_branch_b_window_sec"
+    )
+    tracking_entry_rearm_guard_branch_b_min_terminal_distance_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_b_min_terminal_distance_m"
+    )
+    tracking_entry_rearm_guard_branch_b_min_lateral_abs_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_b_min_lateral_abs_m"
+    )
+    tracking_entry_rearm_guard_branch_b_max_along_error_m = _as_float(
+        context, "tracking_entry_rearm_guard_branch_b_max_along_error_m"
+    )
     mini_takeoff_altitude = _as_float(context, "mini_takeoff_altitude")
     mini_orbit_radius = _as_float(context, "mini_orbit_radius")
     mini_orbit_speed = _as_float(context, "mini_orbit_speed")
@@ -67,6 +152,7 @@ def _launch_setup(context, *args, **kwargs):
     mini_slowdown_finish_distance = _as_float(context, "mini_slowdown_finish_distance")
     mini_max_accel = _as_float(context, "mini_max_accel")
     carrier_max_accel = _as_float(context, "carrier_max_accel")
+    carrier_departure_min_orbit_fraction = _as_float(context, "carrier_departure_min_orbit_fraction")
     carrier_max_speed_xy = _as_float(context, "carrier_max_speed_xy")
     carrier_max_speed_z = _as_float(context, "carrier_max_speed_z")
     attach_distance = _as_float(context, "attach_distance")
@@ -113,7 +199,7 @@ def _launch_setup(context, *args, **kwargs):
             "approach_distance": 24.0,
             "tracking_distance": 10.0,
             "docking_distance": 1.2,
-            "idle_hover_altitude": 0.4,
+            "idle_hover_altitude": carrier_idle_hover_altitude,
             "control_rate": 50.0,
             "k1": 1.0,
             "k2": 2.0,
@@ -129,8 +215,40 @@ def _launch_setup(context, *args, **kwargs):
             "carrier_tracking_speed_limit": carrier_tracking_speed_limit,
             "carrier_docking_speed_limit": carrier_docking_speed_limit,
             "carrier_max_accel": carrier_max_accel,
+            "carrier_departure_min_orbit_fraction": carrier_departure_min_orbit_fraction,
             "intercept_lookahead": 1.6,
             "docking_speed_threshold": 1.0,
+            "mini_orbit_center": [mini_orbit_center[0], mini_orbit_center[1], mini_takeoff_altitude],
+            "mini_orbit_radius": mini_orbit_radius,
+            "mini_orbit_speed": mini_orbit_speed,
+            "global_intercept_enabled": global_intercept_enabled,
+            "global_intercept_horizon_min_sec": global_intercept_horizon_min_sec,
+            "global_intercept_horizon_max_sec": global_intercept_horizon_max_sec,
+            "global_intercept_horizon_step_sec": global_intercept_horizon_step_sec,
+            "global_intercept_lead_distance_min_m": global_intercept_lead_distance_min_m,
+            "global_intercept_lead_distance_max_m": global_intercept_lead_distance_max_m,
+            "global_intercept_route_min_forward_cos": global_intercept_route_min_forward_cos,
+            "global_intercept_path_weight": global_intercept_path_weight,
+            "global_intercept_alignment_weight": global_intercept_alignment_weight,
+            "global_intercept_time_weight": global_intercept_time_weight,
+            "tracking_entry_rearm_guard_enabled": tracking_entry_rearm_guard_enabled,
+            "tracking_entry_rearm_guard_branch_a_window_sec": tracking_entry_rearm_guard_branch_a_window_sec,
+            "tracking_entry_rearm_guard_branch_a_min_terminal_distance_m": tracking_entry_rearm_guard_branch_a_min_terminal_distance_m,
+            "tracking_entry_rearm_guard_branch_a_min_lateral_abs_m": tracking_entry_rearm_guard_branch_a_min_lateral_abs_m,
+            "tracking_entry_rearm_guard_branch_a_max_along_error_m": tracking_entry_rearm_guard_branch_a_max_along_error_m,
+            "tracking_entry_rearm_guard_branch_b_window_sec": tracking_entry_rearm_guard_branch_b_window_sec,
+            "tracking_entry_rearm_guard_branch_b_min_terminal_distance_m": tracking_entry_rearm_guard_branch_b_min_terminal_distance_m,
+            "tracking_entry_rearm_guard_branch_b_min_lateral_abs_m": tracking_entry_rearm_guard_branch_b_min_lateral_abs_m,
+            "tracking_entry_rearm_guard_branch_b_max_along_error_m": tracking_entry_rearm_guard_branch_b_max_along_error_m,
+            "carrier_front_fail_abort_enabled": carrier_front_fail_abort_enabled,
+            "carrier_front_fail_threshold_sec": carrier_front_fail_threshold_sec,
+            "carrier_front_fail_along_tolerance_m": carrier_front_fail_along_tolerance_m,
+            "carrier_ahead_constraint_enabled": True,
+            "carrier_ahead_min_margin_m": 20.0,
+            "carrier_ahead_max_margin_m": 30.0,
+            "carrier_ahead_recover_gain": 2.5,
+            "carrier_ahead_max_boost_mps": 8.0,
+            "carrier_ahead_slowdown_gain": 0.25,
         }],
     )
 
@@ -215,6 +333,23 @@ def _launch_setup(context, *args, **kwargs):
             "use_velocity_feedforward": True,
             "use_position_setpoint": carrier_use_position_setpoint,
             "activate_on_launch": carrier_activate_on_launch,
+            "same_direction_guard_enabled": carrier_same_direction_guard_enabled,
+            "same_direction_guard_only_carrier": True,
+            "same_direction_guard_reverse_threshold_mps": carrier_same_direction_guard_reverse_threshold_mps,
+            "same_direction_guard_release_forward_mps": carrier_same_direction_guard_release_forward_mps,
+            "same_direction_guard_min_forward_command_mps": carrier_same_direction_guard_min_forward_command_mps,
+            "same_direction_guard_force_min_forward_command_mps": carrier_same_direction_guard_force_min_forward_command_mps,
+            "same_direction_guard_max_lateral_command_mps": carrier_same_direction_guard_max_lateral_command_mps,
+            "same_direction_guard_force_duration_sec": carrier_same_direction_guard_force_duration_sec,
+            "same_direction_guard_predictive_lead_enabled": carrier_same_direction_guard_predictive_lead_enabled,
+            "same_direction_guard_predictive_adaptive_horizon_enabled": carrier_same_direction_guard_predictive_adaptive_horizon_enabled,
+            "same_direction_guard_predictive_min_horizon_sec": carrier_same_direction_guard_predictive_min_horizon_sec,
+            "same_direction_guard_predictive_horizon_sec": carrier_same_direction_guard_predictive_horizon_sec,
+            "same_direction_guard_predictive_horizon_gain": carrier_same_direction_guard_predictive_horizon_gain,
+            "same_direction_guard_predictive_use_acceleration": carrier_same_direction_guard_predictive_use_acceleration,
+            "same_direction_guard_predictive_max_accel_mps2": carrier_same_direction_guard_predictive_max_accel_mps2,
+            "same_direction_guard_predictive_accel_filter_alpha": carrier_same_direction_guard_predictive_accel_filter_alpha,
+            "same_direction_guard_predictive_tangent_weight": carrier_same_direction_guard_predictive_tangent_weight,
         }],
     )
 
@@ -326,17 +461,56 @@ def generate_launch_description():
         DeclareLaunchArgument("use_mock_sim", default_value="true"),
         DeclareLaunchArgument("use_px4_odom_bridge", default_value="false"),
         DeclareLaunchArgument("carrier_activate_on_launch", default_value="false"),
+        DeclareLaunchArgument("carrier_idle_hover_altitude", default_value="0.4"),
         DeclareLaunchArgument("carrier_use_position_setpoint", default_value="true"),
+        DeclareLaunchArgument("carrier_same_direction_guard_enabled", default_value="false"),
+        DeclareLaunchArgument("carrier_same_direction_guard_reverse_threshold_mps", default_value="0.1"),
+        DeclareLaunchArgument("carrier_same_direction_guard_release_forward_mps", default_value="0.8"),
+        DeclareLaunchArgument("carrier_same_direction_guard_min_forward_command_mps", default_value="1.2"),
+        DeclareLaunchArgument("carrier_same_direction_guard_force_min_forward_command_mps", default_value="3.0"),
+        DeclareLaunchArgument("carrier_same_direction_guard_max_lateral_command_mps", default_value="1.8"),
+        DeclareLaunchArgument("carrier_same_direction_guard_force_duration_sec", default_value="8.0"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_lead_enabled", default_value="true"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_adaptive_horizon_enabled", default_value="true"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_min_horizon_sec", default_value="2.0"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_horizon_sec", default_value="8.0"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_horizon_gain", default_value="0.85"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_use_acceleration", default_value="true"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_max_accel_mps2", default_value="3.0"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_accel_filter_alpha", default_value="0.35"),
+        DeclareLaunchArgument("carrier_same_direction_guard_predictive_tangent_weight", default_value="0.25"),
         DeclareLaunchArgument("mini_use_offboard_orbit_hold", default_value="false"),
         DeclareLaunchArgument("mini_orbit_hold_ready_altitude", default_value="29.0"),
         DeclareLaunchArgument("mini_orbit_hold_enable_delay_sec", default_value="4.0"),
         DeclareLaunchArgument("mini_allow_orbit_recentering", default_value="false"),
         DeclareLaunchArgument("carrier_offset_auto", default_value="true"),
-        DeclareLaunchArgument("carrier_outside_margin", default_value="10.0"),
+        DeclareLaunchArgument("carrier_outside_margin", default_value="6.0"),
         DeclareLaunchArgument("carrier_outside_angle_deg", default_value="-135.0"),
-        DeclareLaunchArgument("carrier_approach_speed_limit", default_value="11.6"),
-        DeclareLaunchArgument("carrier_tracking_speed_limit", default_value="10.8"),
-        DeclareLaunchArgument("carrier_docking_speed_limit", default_value="9.4"),
+        DeclareLaunchArgument("carrier_approach_speed_limit", default_value="9.0"),
+        DeclareLaunchArgument("carrier_tracking_speed_limit", default_value="9.0"),
+        DeclareLaunchArgument("carrier_docking_speed_limit", default_value="6.0"),
+        DeclareLaunchArgument("global_intercept_enabled", default_value="true"),
+        DeclareLaunchArgument("global_intercept_horizon_min_sec", default_value="1.5"),
+        DeclareLaunchArgument("global_intercept_horizon_max_sec", default_value="9.0"),
+        DeclareLaunchArgument("global_intercept_horizon_step_sec", default_value="0.5"),
+        DeclareLaunchArgument("global_intercept_lead_distance_min_m", default_value="8.0"),
+        DeclareLaunchArgument("global_intercept_lead_distance_max_m", default_value="22.0"),
+        DeclareLaunchArgument("global_intercept_route_min_forward_cos", default_value="0.45"),
+        DeclareLaunchArgument("global_intercept_path_weight", default_value="1.0"),
+        DeclareLaunchArgument("global_intercept_alignment_weight", default_value="10.0"),
+        DeclareLaunchArgument("global_intercept_time_weight", default_value="0.35"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_enabled", default_value="false"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_a_window_sec", default_value="5.0"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_a_min_terminal_distance_m", default_value="3.0"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_a_min_lateral_abs_m", default_value="1.6"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_a_max_along_error_m", default_value="1.0"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_b_window_sec", default_value="8.0"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_b_min_terminal_distance_m", default_value="2.5"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_b_min_lateral_abs_m", default_value="2.2"),
+        DeclareLaunchArgument("tracking_entry_rearm_guard_branch_b_max_along_error_m", default_value="0.2"),
+        DeclareLaunchArgument("carrier_front_fail_abort_enabled", default_value="false"),
+        DeclareLaunchArgument("carrier_front_fail_threshold_sec", default_value="3.0"),
+        DeclareLaunchArgument("carrier_front_fail_along_tolerance_m", default_value="2.0"),
         DeclareLaunchArgument("mini_takeoff_altitude", default_value="30.0"),
         DeclareLaunchArgument("mini_orbit_radius", default_value="55.0"),
         DeclareLaunchArgument("mini_orbit_speed", default_value="10.0"),
@@ -365,6 +539,7 @@ def generate_launch_description():
         DeclareLaunchArgument("mini_slowdown_finish_distance", default_value="2.0"),
         DeclareLaunchArgument("mini_max_accel", default_value="2.0"),
         DeclareLaunchArgument("carrier_max_accel", default_value="2.5"),
+        DeclareLaunchArgument("carrier_departure_min_orbit_fraction", default_value="0.35"),
         DeclareLaunchArgument("carrier_max_speed_xy", default_value="11.8"),
         DeclareLaunchArgument("carrier_max_speed_z", default_value="2.2"),
         DeclareLaunchArgument("attach_distance", default_value="0.24"),

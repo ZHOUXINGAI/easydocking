@@ -1,0 +1,9 @@
+scenario,run_id,phase_end,final_pass,first_tracking_t_sec,first_docking_t_sec,first_completed_t_sec,track_ahead_ratio_positive,track_ahead_min_m,docking_ahead_ratio_positive,docking_ahead_min_m,docking_negative_duration_sec,opp_ratio_6s_speedg1
+speed14p8_rviz_silent,20260415_131444_px4_sih,TRACKING,0.000000,81.260000,,,1.000000,1.643358,,,,0.000000
+speed14p8_rviz_silent,20260415_131836_px4_sih,COMPLETED,1.000000,82.300000,90.500000,96.100000,0.851449,-0.675636,0.633929,-0.675636,2.460000,0.000000
+mini_slow_docking_capture,20260415_132328_px4_sih,COMPLETED,1.000000,82.640000,93.000000,97.500000,0.915825,-0.680716,0.800000,-0.680716,1.080000,0.074380
+mini_slow_docking_capture,20260415_132541_px4_sih,TRACKING,0.000000,83.140000,,,1.000000,1.461051,,,,0.000000
+first_entry_max_ahead_6p6_reverted,20260415_134032_px4_sih,COMPLETED,1.000000,83.240000,93.540000,104.340000,0.921801,-0.417100,0.825397,-0.417100,1.320000,0.049587
+first_entry_max_ahead_6p6_reverted,20260415_134313_px4_sih,TRACKING,0.000000,83.240000,,,1.000000,1.542540,,,,0.000000
+early_release_score_1p9,20260415_134835_px4_sih,DOCKING,0.000000,68.700000,76.940000,,1.000000,0.735027,1.000000,1.956609,0.000000,0.000000
+early_release_score_1p9,20260415_135224_px4_sih,COMPLETED,1.000000,82.740000,90.980000,97.040000,0.853147,-0.955818,0.652893,-0.955818,2.100000,0.000000

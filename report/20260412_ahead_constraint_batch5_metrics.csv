@@ -1,0 +1,6 @@
+run_id,classification,final_pass,final_phase,first_non_idle_t_sec,ahead_ratio_positive_pre_completed,ahead_min_m,ahead_sign_flip_count
+20260411_235752_px4_sih,final-pass,1,COMPLETED,78.84,0.735,-1.667,3
+20260412_000046_px4_sih,geometry-fail,0,DOCKING,103.24,0.945,-2.187,6
+20260412_000441_px4_sih,geometry-fail,0,DOCKING,78.80,0.822,-2.437,2
+20260412_000734_px4_sih,final-pass,1,COMPLETED,77.48,0.750,-2.264,15
+20260412_001028_px4_sih,final-pass,1,COMPLETED,78.90,0.848,-0.936,3

@@ -53,6 +53,24 @@ public:
   void setCarrierMaxAccel(double max_accel);
   void setInterceptLookahead(double lookahead);
   void setDockingSpeedThreshold(double threshold);
+  void setMiniOrbitModel(double radius, double speed, const Eigen::Vector3d & center);
+  void setCarrierDepartureMinOrbitFraction(double fraction);
+  void computeCorridorPlan();
+  bool hasNewCorridorPlan() const { return corridor_plan_valid_ && !corridor_plan_published_; }
+  void markCorridorPlanPublished() { corridor_plan_published_ = true; }
+  const Eigen::Vector3d& getCorridorTangentPoint() const { return corridor_tangent_point_; }
+  const Eigen::Vector3d& getCorridorTangentDir() const { return corridor_tangent_dir_; }
+  double getCorridorHoldDuration() const { return corridor_hold_duration_; }
+  double getCorridorPlannedSpeed() const { return corridor_planned_speed_; }
+  double getCorridorTrajDuration() const { return corridor_traj_duration_; }
+  double getCorridorMiniArrivalDelay() const { return corridor_mini_arrival_delay_; }
+  double getCorridorArcCenterX() const { return corridor_arc_center_.x(); }
+  double getCorridorArcCenterY() const { return corridor_arc_center_.y(); }
+  double getCorridorArcRadius() const { return corridor_arc_radius_; }
+  double getCorridorArcPhiStart() const { return corridor_arc_phi_start_; }
+  double getCorridorArcDeltaPhi() const { return corridor_arc_delta_phi_; }
+  const Eigen::Vector3d& getMiniOrbitCenter() const { return mini_orbit_center_; }
+  double getMiniOrbitRadius() const { return mini_orbit_radius_; }
 
   // 位姿更新
   void updatePoses(const geometry_msgs::msg::Pose& carrier_pose,
@@ -146,6 +164,27 @@ private:
   double corridor_release_score_filtered_;
   bool corridor_release_armed_;
   int corridor_release_accept_counter_;
+  // CorridorPlan: pre-computed tangent-intercept geometry
+  bool corridor_plan_valid_;
+  bool corridor_plan_published_;
+  Eigen::Vector3d corridor_tangent_point_;   // T on orbit circle (mini cut-out point)
+  Eigen::Vector3d corridor_carrier_target_;  // target ahead of T for carrier approach
+  Eigen::Vector3d corridor_tangent_dir_;     // CCW tangent unit vector at T
+  double corridor_hold_duration_;
+  double corridor_planned_speed_;  // planned approach speed from corridor plan
+  double corridor_mini_arrival_delay_; // t_mini: time for mini to orbit to T
+  // Time-parameterized trajectory: circular arc from C to T, tangent to orbit
+  Eigen::Vector3d corridor_traj_start_;
+  Eigen::Vector3d corridor_traj_end_;
+  double corridor_traj_duration_;
+  double corridor_traj_start_time_;
+  bool corridor_traj_active_;
+  int corridor_traj_counter_;
+  // Arc parameters: center M, radius r, start/end angles φ, angular velocity ω
+  Eigen::Vector2d corridor_arc_center_;
+  double corridor_arc_radius_;
+  double corridor_arc_phi_start_;
+  double corridor_arc_delta_phi_;  // signed: end - start
   double carrier_approach_speed_limit_;
   double carrier_tracking_speed_limit_;
   double carrier_docking_speed_limit_;
@@ -168,6 +207,18 @@ private:
   int terminal_z_out_counter_;
   int terminal_lat_hold_latch_counter_;
   int tracking_lat_hold_counter_;
+  // Departure hold: carrier waits at idle position before starting approach
+  bool departure_hold_active_;
+  bool departure_hold_completed_;
+  int approach_hold_counter_;
+  double carrier_departure_min_orbit_fraction_;
+  // Orbit model (set by node from config)
+  double mini_orbit_radius_;
+  double mini_orbit_speed_;
+  Eigen::Vector3d mini_orbit_center_;
+  // Frozen approach direction: locked at departure hold end
+  bool approach_direction_locked_;
+  Eigen::Vector3d primary_approach_tangent_;
   std::array<double, 20> controller_debug_;
 };
 

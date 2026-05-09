@@ -68,7 +68,7 @@ MINI_ORBIT_HOLD_ENABLE_DELAY_SEC="${MINI_ORBIT_HOLD_ENABLE_DELAY_SEC:-4.0}"
 MINI_USE_OFFBOARD_ORBIT_HOLD="${MINI_USE_OFFBOARD_ORBIT_HOLD:-false}"
 MINI_ALLOW_ORBIT_RECENTERING="${MINI_ALLOW_ORBIT_RECENTERING:-true}"
 CARRIER_APPROACH_SPEED_LIMIT="${CARRIER_APPROACH_SPEED_LIMIT:-12.0}"
-CARRIER_TRACKING_SPEED_LIMIT="${CARRIER_TRACKING_SPEED_LIMIT:-11.4}"
+CARRIER_TRACKING_SPEED_LIMIT="${CARRIER_TRACKING_SPEED_LIMIT:-13.0}"
 CARRIER_DOCKING_SPEED_LIMIT="${CARRIER_DOCKING_SPEED_LIMIT:-9.8}"
 CARRIER_MAX_ACCEL="${CARRIER_MAX_ACCEL:-2.5}"
 CARRIER_USE_POSITION_SETPOINT="${CARRIER_USE_POSITION_SETPOINT:-true}"
@@ -81,6 +81,8 @@ source "$ROOT_DIR/scripts/setup_local_env.sh"
 set -u
 
 cleanup_existing() {
+  pkill -9 -f wait_for_docking_window.py 2>/dev/null || true
+  pkill -9 -f start_docking_command.sh 2>/dev/null || true
   pkill -9 -f "ros2 launch easydocking_control" 2>/dev/null || true
   pkill -9 -f docking_controller_node 2>/dev/null || true
   pkill -9 -f simple_dual_uav_sim.py 2>/dev/null || true

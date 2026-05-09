@@ -1,0 +1,6 @@
+run_id,phase_end,final_pass,first_tracking_t_sec,first_docking_t_sec,first_completed_t_sec,track_ahead_ratio_positive,track_ahead_min_m,docking_ahead_ratio_positive,docking_ahead_min_m,docking_negative_duration_sec,opp_ratio_6s_speedg1,carrier_cmd_speed_p95_mps,carrier_cmd_acc_p95_mps2,carrier_act_speed_p95_mps,carrier_act_acc_p95_mps2,mini_tas_p95_mps,mini_tas_sp_p95_mps
+20260415_111500_px4_sih,TRACKING,0,74.50,,,1.000,0.710,nan,nan,0.000,0.000,14.491,3.536,11.212,6.303,12.053,10.833
+20260415_111733_px4_sih,TRACKING,0,66.26,,,1.000,1.043,nan,nan,0.000,0.000,14.488,3.536,12.109,6.581,12.341,10.832
+20260415_112005_px4_sih,TRACKING,0,73.10,,,1.000,0.787,nan,nan,0.000,0.000,14.489,3.536,11.622,6.488,12.105,10.833
+20260415_112237_px4_sih,TRACKING,0,87.10,,,1.000,0.535,nan,nan,0.000,0.000,14.518,3.536,12.603,9.761,11.968,10.831
+20260415_112512_px4_sih,TRACKING,0,68.14,76.34,,1.000,0.535,1.000,1.089,0.000,0.000,14.500,3.536,11.572,5.420,12.249,10.832

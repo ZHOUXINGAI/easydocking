@@ -1,0 +1,4 @@
+classification=geometry-fail
+reason=start cluster=8.142 dist_xy=105.727 speed_xy=12.845 align=0.836 tca=6.879
+reason=first_docking distance=1.626 along=0.514 lat=1.431 vz=0.059
+reason=best_active distance=1.264 phase=DOCKING along=0.988 lat=0.503 speed=0.489

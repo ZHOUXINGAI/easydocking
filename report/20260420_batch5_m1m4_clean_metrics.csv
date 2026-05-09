@@ -1,0 +1,6 @@
+run_id,phase_end,final_pass,first_tracking_t_sec,first_docking_t_sec,first_completed_t_sec,track_ahead_ratio_positive,track_ahead_min_m,docking_ahead_ratio_positive,docking_ahead_min_m,docking_negative_duration_sec,opp_ratio_6s_speedg1,straight_sec,dock_to_completed_sec,m1_same_direction_ok,m2_front_ok,m3_short_endgame_ok,m4_final_pass_ok,all_m1_m4_ok
+20260420_132136_px4_sih,TRACKING,0.0,82.6,,,1.0,0.762251,,,,0.0,0.0,,True,False,False,False,False
+20260420_132528_px4_sih,DOCKING,0.0,79.44,87.8,,0.9880715705765407,-0.924631,1.0,1.723586,0.0,0.04132231404958678,110.63999999997799,,False,True,False,False,False
+20260420_132905_px4_sih,NO_DATA,0.0,,,,,,,,,,0.0,,False,False,False,False,False
+20260420_133229_px4_sih,DOCKING,0.0,67.24,75.48,,0.9162234042553191,-1.181272,0.9868147120055517,-0.25062,0.7790000000000745,0.0,58.87600000000563,,True,False,False,False,False
+20260420_133623_px4_sih,COMPLETED,1.0,83.28,131.04,170.24,0.828637147786084,-10.545767,0.7533039647577092,-0.413708,2.799999999999841,0.0,14.149999999999196,39.20000000000002,True,False,False,True,False

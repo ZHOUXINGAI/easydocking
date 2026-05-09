@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import csv
+import io
 import math
 import os
 import sys
@@ -112,8 +113,10 @@ def load_summary(path: Path) -> dict[str, str]:
 def load_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    with path.open() as f:
-        return list(csv.DictReader(f))
+    raw_text = path.read_text(encoding="utf-8", errors="ignore")
+    if "\x00" in raw_text:
+        raw_text = raw_text.replace("\x00", "")
+    return list(csv.DictReader(io.StringIO(raw_text)))
 
 
 def safe_float(row: dict[str, str], key: str, default: float = math.nan) -> float:
@@ -427,6 +430,74 @@ def post_start_energy_stats(rows: list[dict[str, str]]) -> dict[str, object]:
     }
 
 
+def compute_tracking_entry_window_metrics(rows: list[dict[str, str]]) -> dict[str, float]:
+    tracking_rows = [row for row in rows if (row.get("phase") or "").strip() == "TRACKING"]
+    if not tracking_rows:
+        return {
+            "tracking_nearest_t_sec": math.nan,
+            "tracking_nearest_terminal_distance_m": math.nan,
+            "tracking_nearest_along_error_m": math.nan,
+            "tracking_nearest_lateral_error_m": math.nan,
+            "tracking_nearest_lateral_abs_m": math.nan,
+            "tracking_nearest_rel_z_m": math.nan,
+            "tracking_behind_rows": 0.0,
+            "tracking_behind_best_t_sec": math.nan,
+            "tracking_behind_best_terminal_distance_m": math.nan,
+            "tracking_behind_best_along_error_m": math.nan,
+            "tracking_behind_best_lateral_error_m": math.nan,
+            "tracking_behind_best_lateral_abs_m": math.nan,
+            "tracking_behind_best_rel_z_m": math.nan,
+        }
+
+    nearest = min(
+        tracking_rows,
+        key=lambda row: safe_float(row, "controller_terminal_distance", math.inf),
+    )
+    behind_rows = [
+        row for row in tracking_rows
+        if (
+            _finite(safe_float(row, "controller_terminal_distance")) and
+            safe_float(row, "controller_terminal_distance") < 8.4 and
+            _finite(safe_float(row, "controller_terminal_along_error")) and
+            -6.0 < safe_float(row, "controller_terminal_along_error") < -0.6 and
+            _finite(safe_float(row, "rel_z")) and
+            0.25 < safe_float(row, "rel_z") < 0.95
+        )
+    ]
+    best_behind = None
+    if behind_rows:
+        best_behind = min(
+            behind_rows,
+            key=lambda row: safe_float(row, "controller_terminal_distance", math.inf),
+        )
+
+    return {
+        "tracking_nearest_t_sec": safe_float(nearest, "t"),
+        "tracking_nearest_terminal_distance_m": safe_float(nearest, "controller_terminal_distance"),
+        "tracking_nearest_along_error_m": safe_float(nearest, "controller_terminal_along_error"),
+        "tracking_nearest_lateral_error_m": safe_float(nearest, "controller_terminal_lateral_error"),
+        "tracking_nearest_lateral_abs_m": abs(
+            safe_float(nearest, "controller_terminal_lateral_error")
+        ),
+        "tracking_nearest_rel_z_m": safe_float(nearest, "rel_z"),
+        "tracking_behind_rows": float(len(behind_rows)),
+        "tracking_behind_best_t_sec": safe_float(best_behind or {}, "t"),
+        "tracking_behind_best_terminal_distance_m": safe_float(
+            best_behind or {}, "controller_terminal_distance"
+        ),
+        "tracking_behind_best_along_error_m": safe_float(
+            best_behind or {}, "controller_terminal_along_error"
+        ),
+        "tracking_behind_best_lateral_error_m": safe_float(
+            best_behind or {}, "controller_terminal_lateral_error"
+        ),
+        "tracking_behind_best_lateral_abs_m": abs(
+            safe_float(best_behind or {}, "controller_terminal_lateral_error")
+        ),
+        "tracking_behind_best_rel_z_m": safe_float(best_behind or {}, "rel_z"),
+    }
+
+
 def classify_result(result_dir: Path) -> tuple[str, list[str]]:
     summary = load_summary(result_dir / "summary.txt")
     rows = load_rows(result_dir / "docking_log.csv")
@@ -456,6 +527,17 @@ def classify_result(result_dir: Path) -> tuple[str, list[str]]:
         if "Auto START sent" in start_log:
             reasons.append("start_sent_but_no_active_phase")
         return "start-window-fail", reasons
+
+    start_prehold_required = _summary_float(summary, "start_prehold_required")
+    start_prehold_ready = _summary_float(summary, "start_prehold_ready")
+    if start_prehold_required >= 0.5 and start_prehold_ready < 0.5:
+        reasons.append(
+            "start_prehold "
+            f"carrier_z={_summary_float(summary, 'start_carrier_z_m'):.3f} "
+            f"carrier_vz={_summary_float(summary, 'start_carrier_vz_mps'):.3f} "
+            f"min_alt={_summary_float(summary, 'start_prehold_min_altitude_m'):.3f}"
+        )
+        return "prehold-start-fail", reasons
 
     energy_stats = post_start_energy_stats(rows)
     worst_energy_row = energy_stats["worst_bad_row"]
@@ -509,6 +591,17 @@ def classify_result(result_dir: Path) -> tuple[str, list[str]]:
             f"distance={safe_float(best or {}, 'relative_distance', math.nan):.3f} "
             f"phase={(best or {}).get('phase', '')}"
         )
+
+    tracking_entry = compute_tracking_entry_window_metrics(rows)
+    reasons.append(
+        "tracking_entry "
+        f"nearest_term={tracking_entry['tracking_nearest_terminal_distance_m']:.3f} "
+        f"nearest_along={tracking_entry['tracking_nearest_along_error_m']:.3f} "
+        f"nearest_lat={tracking_entry['tracking_nearest_lateral_abs_m']:.3f} "
+        f"behind_rows={int(tracking_entry['tracking_behind_rows'])} "
+        f"behind_best_term={tracking_entry['tracking_behind_best_terminal_distance_m']:.3f} "
+        f"behind_best_lat={tracking_entry['tracking_behind_best_lateral_abs_m']:.3f}"
+    )
 
     return "geometry-fail", reasons
 

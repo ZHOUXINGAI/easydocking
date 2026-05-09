@@ -1,0 +1,7 @@
+reason=timeout
+rows=2398
+phase=APPROACH
+completed_rows=0
+post_completed_settle_sec=0.600
+post_completed_rows=12
+csv=/home/hw/easydocking/result_sim/20260509_100613_mock/docking_log.csv

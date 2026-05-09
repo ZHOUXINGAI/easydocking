@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import csv
+import io
 import math
 import os
 import re
@@ -9,20 +10,64 @@ from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
+
+
+def parse_corridor_plan_from_log(log_path: Path):
+    """Extract CorridorPlan data from launch.log (old or new format)."""
+    if not log_path.exists():
+        return None
+    text = log_path.read_text(encoding="utf-8", errors="ignore")
+    # New format with arc params
+    m = re.search(
+        r"CorridorPlan published: T=\(([^)]+)\) dir=\(([^)]+)\) "
+        r"hold=([\d.]+)s spd=([\d.]+)m/s "
+        r"arc_M=\(([^)]+)\) arc_r=([\d.]+) arc_phi0=([\d.-]+) arc_dphi=([\d.-]+) "
+        r"trigger_phase=([\d.]+)deg",
+        text,
+    )
+    if m:
+        tx, ty = [float(v) for v in m.group(1).split(",")]
+        dx, dy = [float(v) for v in m.group(2).split(",")]
+        mx, my = [float(v) for v in m.group(5).split(",")]
+        return {
+            "T": (tx, ty), "dir": (dx, dy),
+            "hold_sec": float(m.group(3)), "spd": float(m.group(4)),
+            "arc_M": (mx, my), "arc_r": float(m.group(6)),
+            "arc_phi0": float(m.group(7)), "arc_dphi": float(m.group(8)),
+            "trigger_phase_deg": float(m.group(9)),
+        }
+    # Old format (no arc)
+    m = re.search(
+        r"CorridorPlan published: T=\(([^)]+)\) dir=\(([^)]+)\) "
+        r"hold=([\d.]+)s trigger_phase=([\d.]+)deg",
+        text,
+    )
+    if not m:
+        return None
+    tx, ty = [float(v) for v in m.group(1).split(",")]
+    dx, dy = [float(v) for v in m.group(2).split(",")]
+    return {
+        "T": (tx, ty), "dir": (dx, dy),
+        "hold_sec": float(m.group(3)),
+        "trigger_phase_deg": float(m.group(4)),
+    }
 
 
 def load_rows(csv_path: Path):
     rows = []
-    with csv_path.open("r", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            parsed = {}
-            for key, value in row.items():
-                if key == "phase":
-                    parsed[key] = value
-                else:
-                    parsed[key] = float(value)
-            rows.append(parsed)
+    raw_text = csv_path.read_text(encoding="utf-8", errors="ignore")
+    if "\x00" in raw_text:
+        raw_text = raw_text.replace("\x00", "")
+    reader = csv.DictReader(io.StringIO(raw_text))
+    for row in reader:
+        parsed = {}
+        for key, value in row.items():
+            if key == "phase":
+                parsed[key] = value
+            else:
+                parsed[key] = float(value)
+        rows.append(parsed)
     return rows
 
 
@@ -37,6 +82,39 @@ def load_metadata(path: Path):
             key, value = line.strip().split("=", 1)
             metadata[key] = value
     return metadata
+
+
+def parse_start_window_accept_metrics(output_dir: Path):
+    log_path = output_dir / "start_command.log"
+    if not log_path.exists():
+        return {}
+
+    accepted_line = None
+    for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if "Window accepted " in line:
+            accepted_line = line
+            break
+    if accepted_line is None:
+        return {}
+
+    payload = accepted_line.split("Window accepted ", 1)[-1]
+    metrics = {}
+    for token in payload.split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        value = value.strip().rstrip(",")
+        metric_key = f"accepted_window_{key}"
+        try:
+            numeric = float(value)
+        except ValueError:
+            metrics[metric_key] = value
+            continue
+        if math.isfinite(numeric):
+            metrics[metric_key] = numeric
+        else:
+            metrics[metric_key] = value
+    return metrics
 
 
 def measured_rel_position(row):
@@ -78,6 +156,23 @@ def parse_pair(value: str):
     if len(parts) < 2:
         raise ValueError(f"invalid pair: {value}")
     return float(parts[0]), float(parts[1])
+
+
+def metadata_float(metadata: dict[str, str], key: str, default: float) -> float:
+    value = str(metadata.get(key, "")).strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def metadata_bool(metadata: dict[str, str], key: str, default: bool = False) -> bool:
+    value = str(metadata.get(key, "")).strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
 
 
 def wrap_angle_deg(angle: float) -> float:
@@ -139,6 +234,270 @@ def find_release_row_index(rows, distance, rel_x, rel_y, rel_z):
             abs(rows[idx]["rel_z"] - rel_z)
         ),
     )
+
+
+def first_active_row_index(rows):
+    for index, row in enumerate(rows):
+        if row.get("phase") and row.get("phase") != "IDLE":
+            return index
+    return None
+
+
+def first_phase_row_index(rows, phase: str, start_index: int = 0):
+    for index in range(max(0, start_index), len(rows)):
+        if rows[index].get("phase") == phase:
+            return index
+    return None
+
+
+def first_corridor_active_index(rows, start_index: int = 0):
+    for index in range(max(0, start_index), len(rows)):
+        value = rows[index].get("controller_rendezvous_corridor_active", math.nan)
+        if math.isfinite(value) and value >= 0.5:
+            return index
+    return None
+
+
+def carrier_xy_path_length(rows, start_index: int, end_index: int | None = None) -> float:
+    if start_index is None or start_index < 0 or start_index >= len(rows):
+        return math.nan
+    last_index = len(rows) - 1 if end_index is None else max(start_index, min(end_index, len(rows) - 1))
+    total = 0.0
+    previous = rows[start_index]
+    for index in range(start_index + 1, last_index + 1):
+        current = rows[index]
+        dx = current["carrier_x"] - previous["carrier_x"]
+        dy = current["carrier_y"] - previous["carrier_y"]
+        step = math.hypot(dx, dy)
+        if math.isfinite(step):
+            total += step
+        previous = current
+    return total
+
+
+def carrier_xy_net_displacement(rows, start_index: int, end_index: int | None = None) -> float:
+    if start_index is None or start_index < 0 or start_index >= len(rows):
+        return math.nan
+    last_index = len(rows) - 1 if end_index is None else max(start_index, min(end_index, len(rows) - 1))
+    start_row = rows[start_index]
+    end_row = rows[last_index]
+    return math.hypot(
+        end_row["carrier_x"] - start_row["carrier_x"],
+        end_row["carrier_y"] - start_row["carrier_y"],
+    )
+
+
+def row_index_at_or_after_t(rows, target_t: float, start_index: int) -> int | None:
+    if start_index is None or start_index < 0 or start_index >= len(rows):
+        return None
+    for index in range(start_index, len(rows)):
+        if rows[index]["t"] >= target_t:
+            return index
+    return len(rows) - 1 if rows else None
+
+
+def compute_path_efficiency_metrics(rows):
+    metrics = {}
+    start_index = first_active_row_index(rows)
+    if start_index is None:
+        return metrics
+
+    start_row = rows[start_index]
+    start_t = start_row["t"]
+    metrics["start_t_sec"] = start_t
+
+    first_tracking_index = first_phase_row_index(rows, "TRACKING", start_index)
+    if first_tracking_index is not None:
+        metrics["time_to_first_tracking_sec"] = rows[first_tracking_index]["t"] - start_t
+
+    first_docking_index = first_phase_row_index(rows, "DOCKING", start_index)
+    if first_docking_index is not None:
+        metrics["time_to_first_docking_sec"] = rows[first_docking_index]["t"] - start_t
+
+    corridor_index = first_corridor_active_index(rows, start_index)
+    if corridor_index is not None:
+        metrics["time_to_corridor_sec"] = rows[corridor_index]["t"] - start_t
+
+    completed_index = first_phase_row_index(rows, "COMPLETED", start_index)
+    path_end_index = completed_index if completed_index is not None else len(rows) - 1
+    metrics["post_start_path_length_m"] = carrier_xy_path_length(rows, start_index, path_end_index)
+
+    if completed_index is not None:
+        metrics["start_to_completed_sec"] = rows[completed_index]["t"] - start_t
+
+    if first_docking_index is not None:
+        metrics["docking_path_length_m"] = carrier_xy_path_length(rows, first_docking_index, path_end_index)
+
+    for horizon_sec in (10.0, 20.0):
+        horizon_end_index = row_index_at_or_after_t(rows, start_t + horizon_sec, start_index)
+        if horizon_end_index is None:
+            continue
+        horizon_label = str(int(horizon_sec))
+        path_length = carrier_xy_path_length(rows, start_index, horizon_end_index)
+        net_displacement = carrier_xy_net_displacement(rows, start_index, horizon_end_index)
+        metrics[f"post_start_{horizon_label}s_path_length_m"] = path_length
+        metrics[f"post_start_{horizon_label}s_net_displacement_m"] = net_displacement
+        if math.isfinite(path_length) and math.isfinite(net_displacement) and net_displacement > 1e-6:
+            metrics[f"post_start_{horizon_label}s_path_efficiency_ratio"] = path_length / net_displacement
+
+    return metrics
+
+
+def compute_prehold_start_metrics(rows, metadata):
+    metrics = {}
+    start_index = first_active_row_index(rows)
+    if start_index is None:
+        return metrics
+
+    start_row = rows[start_index]
+    carrier_z = start_row.get("carrier_z", math.nan)
+    carrier_vz = start_row.get("carrier_vz", math.nan)
+    metrics["start_carrier_z_m"] = carrier_z
+    metrics["start_carrier_vz_mps"] = carrier_vz
+
+    prehold_required = metadata_bool(metadata, "auto_start_carrier_prehold_required", False)
+    min_altitude = metadata_float(metadata, "auto_start_carrier_prehold_min_altitude_m", 0.0)
+    max_abs_vz = metadata_float(metadata, "auto_start_carrier_prehold_max_abs_vz_mps", 2.5)
+    metrics["start_prehold_required"] = 1.0 if prehold_required else 0.0
+    metrics["start_prehold_min_altitude_m"] = min_altitude
+    metrics["start_prehold_max_abs_vz_mps"] = max_abs_vz
+    if not prehold_required:
+        metrics["start_prehold_ready"] = 1.0
+    else:
+        ready = (
+            math.isfinite(carrier_z) and
+            math.isfinite(carrier_vz) and
+            carrier_z >= min_altitude and
+            abs(carrier_vz) <= max_abs_vz
+        )
+        metrics["start_prehold_ready"] = 1.0 if ready else 0.0
+        if math.isfinite(carrier_z):
+            metrics["start_prehold_alt_margin_m"] = carrier_z - min_altitude
+    return metrics
+
+
+def compute_start_intercept_metrics(rows, metadata):
+    metrics = {}
+    start_index = first_active_row_index(rows)
+    if start_index is None:
+        return metrics
+
+    row = rows[start_index]
+    mini_vx = row["mini_vx"]
+    mini_vy = row["mini_vy"]
+    mini_vz = row["mini_vz"]
+    mini_speed_xy = math.hypot(mini_vx, mini_vy)
+    if mini_speed_xy <= 1e-6:
+        return metrics
+
+    horizon = metadata_float(metadata, "auto_start_rear_entry_prediction_horizon_sec", 6.0)
+    carrier_speed = metadata_float(metadata, "auto_start_rear_entry_prediction_carrier_speed_mps", 9.5)
+    tangent_weight = metadata_float(metadata, "auto_start_rear_entry_prediction_tangent_weight", 0.65)
+    lateral_max = metadata_float(metadata, "auto_start_rear_entry_prediction_lateral_max_m", 20.0)
+    along_min_cfg = metadata_float(metadata, "auto_start_rear_entry_prediction_along_min_m", 10.0)
+    along_max_cfg = metadata_float(metadata, "auto_start_rear_entry_prediction_along_max_m", 70.0)
+    distance_min = metadata_float(metadata, "auto_start_rear_entry_prediction_distance_min_m", 60.0)
+    distance_max = metadata_float(metadata, "auto_start_rear_entry_prediction_distance_max_m", 110.0)
+    score_threshold = metadata_float(metadata, "auto_start_rear_entry_prediction_score_threshold", 2.6)
+    along_target_cfg = metadata_float(metadata, "auto_start_rear_entry_prediction_score_along_target_m", 24.0)
+    require_carrier_behind = metadata_bool(metadata, "auto_start_rear_entry_require_carrier_behind", False)
+
+    mini_dir_x = mini_vx / mini_speed_xy
+    mini_dir_y = mini_vy / mini_speed_xy
+    mini_lat_x = -mini_dir_y
+    mini_lat_y = mini_dir_x
+
+    mini_pred_x = row["mini_x"] + mini_vx * horizon
+    mini_pred_y = row["mini_y"] + mini_vy * horizon
+    mini_pred_z = row["mini_z"] + mini_vz * horizon
+    to_pred_x = mini_pred_x - row["carrier_x"]
+    to_pred_y = mini_pred_y - row["carrier_y"]
+    to_pred_norm = math.hypot(to_pred_x, to_pred_y)
+    if to_pred_norm > 1e-6:
+        to_pred_x /= to_pred_norm
+        to_pred_y /= to_pred_norm
+    else:
+        to_pred_x = mini_dir_x
+        to_pred_y = mini_dir_y
+
+    blend_x = tangent_weight * mini_dir_x + (1.0 - tangent_weight) * to_pred_x
+    blend_y = tangent_weight * mini_dir_y + (1.0 - tangent_weight) * to_pred_y
+    blend_norm = math.hypot(blend_x, blend_y)
+    if blend_norm > 1e-6:
+        blend_x /= blend_norm
+        blend_y /= blend_norm
+    else:
+        blend_x = mini_dir_x
+        blend_y = mini_dir_y
+
+    carrier_pred_x = row["carrier_x"] + blend_x * carrier_speed * horizon
+    carrier_pred_y = row["carrier_y"] + blend_y * carrier_speed * horizon
+
+    prediction_dx = mini_pred_x - carrier_pred_x
+    prediction_dy = mini_pred_y - carrier_pred_y
+    prediction_along_m = prediction_dx * mini_dir_x + prediction_dy * mini_dir_y
+    prediction_lateral_m = prediction_dx * mini_lat_x + prediction_dy * mini_lat_y
+
+    along_target_m = along_target_cfg if require_carrier_behind else -along_target_cfg
+    prediction_along_min_m = along_min_cfg if require_carrier_behind else -along_max_cfg
+    prediction_along_max_m = along_max_cfg if require_carrier_behind else -along_min_cfg
+    along_scale = max(
+        abs(prediction_along_max_m - along_target_m),
+        abs(along_target_m - prediction_along_min_m),
+        1e-6,
+    )
+    prediction_score = (
+        abs(prediction_lateral_m) / max(lateral_max, 1e-6) +
+        abs(prediction_along_m - along_target_m) / along_scale
+    )
+    rel_distance_xy = math.hypot(row["rel_x"], row["rel_y"])
+    lateral_margin = lateral_max - abs(prediction_lateral_m)
+    along_margin = min(
+        prediction_along_m - prediction_along_min_m,
+        prediction_along_max_m - prediction_along_m,
+    )
+    distance_margin = min(rel_distance_xy - distance_min, distance_max - rel_distance_xy)
+    score_margin = score_threshold - prediction_score
+    gate_feasibility_margin = min(lateral_margin, along_margin, distance_margin, score_margin)
+
+    metrics.update({
+        "start_prediction_horizon_sec": horizon,
+        "start_prediction_carrier_speed_mps": carrier_speed,
+        "start_prediction_tangent_weight": tangent_weight,
+        "start_intercept_target_t_sec": row["t"] + horizon,
+        "start_intercept_mini_pred_x_m": mini_pred_x,
+        "start_intercept_mini_pred_y_m": mini_pred_y,
+        "start_intercept_mini_pred_z_m": mini_pred_z,
+        "start_intercept_tangent_heading_deg": math.degrees(math.atan2(mini_dir_y, mini_dir_x)),
+        "start_intercept_guard_heading_deg": math.degrees(math.atan2(blend_y, blend_x)),
+        "start_intercept_guard_dir_x": blend_x,
+        "start_intercept_guard_dir_y": blend_y,
+        "start_intercept_carrier_ref_x_m": carrier_pred_x,
+        "start_intercept_carrier_ref_y_m": carrier_pred_y,
+        "start_intercept_pred_along_m": prediction_along_m,
+        "start_intercept_pred_lat_m": prediction_lateral_m,
+        "start_intercept_pred_score": prediction_score,
+        "start_intercept_score_margin": score_margin,
+        "start_intercept_lateral_margin_m": lateral_margin,
+        "start_intercept_along_margin_m": along_margin,
+        "start_intercept_distance_margin_m": distance_margin,
+        "start_intercept_gate_feasibility_margin_m": gate_feasibility_margin,
+    })
+    return metrics
+
+
+def save_intercept_diagnostics(rows, output_dir: Path, metadata):
+    metrics = compute_start_intercept_metrics(rows, metadata)
+    if not metrics:
+        return None
+    output_path = output_dir / "intercept_diagnostics.txt"
+    with output_path.open("w", encoding="utf-8") as file:
+        for key, value in metrics.items():
+            if isinstance(value, str):
+                file.write(f"{key}={value}\n")
+            elif math.isfinite(value):
+                file.write(f"{key}={value:.6f}\n")
+    return output_path
 
 
 def parse_tangent_events(output_dir: Path):
@@ -353,7 +712,55 @@ def save_distance_plot(rows, output_dir: Path):
     return path
 
 
-def save_xy_plot(rows, output_dir: Path):
+def save_signed_front_distance_plot(rows, output_dir: Path):
+    time_axis = []
+    signed_front_distance = []
+
+    last_axis = (1.0, 0.0)
+    for index, row in enumerate(rows):
+        mini_vx = row.get("mini_vx", math.nan)
+        mini_vy = row.get("mini_vy", math.nan)
+        if not (math.isfinite(mini_vx) and math.isfinite(mini_vy)):
+            mini_vx, mini_vy = estimate_xy_velocity(rows, index)
+        speed = math.hypot(mini_vx, mini_vy)
+        if speed > 1e-6:
+            axis = (mini_vx / speed, mini_vy / speed)
+            last_axis = axis
+        else:
+            axis = last_axis
+
+        carrier_minus_mini_x = row["carrier_x"] - row["mini_x"]
+        carrier_minus_mini_y = row["carrier_y"] - row["mini_y"]
+        signed_distance = (
+            carrier_minus_mini_x * axis[0] +
+            carrier_minus_mini_y * axis[1]
+        )
+
+        time_axis.append(row["t"])
+        signed_front_distance.append(signed_distance)
+
+    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=160)
+    ax.plot(
+        time_axis,
+        signed_front_distance,
+        color="#6a3d9a",
+        lw=2.0,
+        label="Signed front/back distance",
+    )
+    ax.axhline(0.0, color="#555555", lw=1.3, ls="--")
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Signed distance [m]")
+    ax.set_title("Carrier Front/Back Signed Distance ( + front / - back )")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    path = output_dir / "carrier_front_back_signed_distance.png"
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def save_xy_plot(rows, output_dir: Path, corridor_plan=None):
     if not rows:
         raise ValueError("no rows available for XY plot")
 
@@ -391,12 +798,42 @@ def save_xy_plot(rows, output_dir: Path):
     ax.scatter(focused_rows[-1]["carrier_x"], focused_rows[-1]["carrier_y"], color="#a65628", s=42, label="Carrier end")
     ax.scatter(focused_rows[0]["mini_x"], focused_rows[0]["mini_y"], color="#ff7f00", s=40, label="Mini start")
     ax.scatter(focused_rows[-1]["mini_x"], focused_rows[-1]["mini_y"], color="#377eb8", s=40, label="Mini end")
+    # Helper: draw corridor plan (arc or tangent) on an axis
+    def draw_corridor_plan(ax_):
+        if not corridor_plan:
+            return
+        T = corridor_plan["T"]
+        d = corridor_plan["dir"]
+        if "arc_M" in corridor_plan:
+            # Draw the circular arc trajectory (the actual plan)
+            Mx, My = corridor_plan["arc_M"]
+            r = corridor_plan["arc_r"]
+            phi0 = corridor_plan["arc_phi0"]
+            dphi = corridor_plan["arc_dphi"]
+            N = 80
+            phis = [phi0 + dphi * i / N for i in range(N + 1)]
+            ax_.plot(
+                [Mx + r * math.cos(p) for p in phis],
+                [My + r * math.sin(p) for p in phis],
+                "m--", lw=2.0, alpha=0.8, label="CorridorPlan arc"
+            )
+        else:
+            # Fallback: just the tangent line
+            L, A = 60.0, 15.0
+            ax_.plot(
+                [T[0] - d[0] * A, T[0] + d[0] * L],
+                [T[1] - d[1] * A, T[1] + d[1] * L],
+                "m--", lw=1.5, alpha=0.7, label="CorridorPlan (tangent)"
+            )
+        ax_.scatter([T[0]], [T[1]], marker="s", color="magenta", s=36, zorder=5, label="Rendezvous T")
+
+    draw_corridor_plan(ax)
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
     ax.set_title("Planar Docking Trajectory (Focused)")
     ax.axis("equal")
     ax.grid(True, alpha=0.3)
-    ax.legend()
+    ax.legend(fontsize=6)
     fig.tight_layout()
     path = output_dir / "trajectory_xy.png"
     fig.savefig(path)
@@ -409,16 +846,136 @@ def save_xy_plot(rows, output_dir: Path):
     ax_full.scatter(rows[-1]["carrier_x"], rows[-1]["carrier_y"], color="#a65628", s=42, label="Carrier end")
     ax_full.scatter(rows[0]["mini_x"], rows[0]["mini_y"], color="#ff7f00", s=40, label="Mini start")
     ax_full.scatter(rows[-1]["mini_x"], rows[-1]["mini_y"], color="#377eb8", s=40, label="Mini end")
+    draw_corridor_plan(ax_full)
     ax_full.set_xlabel("X [m]")
     ax_full.set_ylabel("Y [m]")
     ax_full.set_title("Planar Docking Trajectory (Full)")
     ax_full.axis("equal")
     ax_full.grid(True, alpha=0.3)
-    ax_full.legend()
+    ax_full.legend(fontsize=7)
     fig_full.tight_layout()
     fig_full.savefig(output_dir / "trajectory_xy_full.png")
     plt.close(fig_full)
     return path
+
+
+def save_xy_animation_gif(rows, output_dir: Path):
+    if not rows:
+        return None
+
+    sample_count = len(rows)
+    step = max(2, sample_count // 150)
+    sampled = rows[::step]
+    if sampled[-1] is not rows[-1]:
+        sampled.append(rows[-1])
+
+    carrier_x = [r["carrier_x"] for r in rows]
+    carrier_y = [r["carrier_y"] for r in rows]
+    mini_x = [r["mini_x"] for r in rows]
+    mini_y = [r["mini_y"] for r in rows]
+    all_x = carrier_x + mini_x
+    all_y = carrier_y + mini_y
+    if not all_x or not all_y:
+        return None
+
+    margin = 10.0
+    fig, ax = plt.subplots(figsize=(6.5, 6.0), dpi=140)
+    ax.set_title("XY Trajectory (animated)")
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.set_xlim(min(all_x) - margin, max(all_x) + margin)
+    ax.set_ylim(min(all_y) - margin, max(all_y) + margin)
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.3)
+
+    # Draw corridor plan arc on animation if available
+    corridor_plan = parse_corridor_plan_from_log(output_dir / "launch.log")
+    if corridor_plan and "arc_M" in corridor_plan:
+        Mx, My = corridor_plan["arc_M"]
+        r = corridor_plan["arc_r"]
+        phi0 = corridor_plan["arc_phi0"]
+        dphi = corridor_plan["arc_delta_phi"] if "arc_delta_phi" in corridor_plan else corridor_plan["arc_dphi"]
+        N = 80
+        phis = [phi0 + dphi * i / N for i in range(N + 1)]
+        ax.plot(
+            [Mx + r * math.cos(p) for p in phis],
+            [My + r * math.sin(p) for p in phis],
+            "m--", lw=1.5, alpha=0.7, label="CorridorPlan arc"
+        )
+        ax.scatter([corridor_plan["T"][0]], [corridor_plan["T"][1]],
+                   marker="s", color="magenta", s=28, zorder=5, label="Rendezvous T")
+    elif corridor_plan:
+        T = corridor_plan["T"]
+        d = corridor_plan["dir"]
+        ax.plot([T[0]-d[0]*15, T[0]+d[0]*60], [T[1]-d[1]*15, T[1]+d[1]*60],
+                "m--", lw=1.5, alpha=0.7, label="CorridorPlan")
+        ax.scatter([T[0]], [T[1]], marker="s", color="magenta", s=28, zorder=5)
+
+    carrier_line, = ax.plot([], [], color="#4daf4a", lw=2.2, label="Carrier")
+    mini_line, = ax.plot([], [], color="#e41a1c", lw=2.0, label="Mini")
+    carrier_point, = ax.plot([], [], "o", color="#4daf4a", ms=5)
+    mini_point, = ax.plot([], [], "o", color="#e41a1c", ms=5)
+    status_text = ax.text(
+        0.02,
+        0.98,
+        "",
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=9,
+        bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none"},
+    )
+    ax.legend(loc="upper right")
+
+    def init():
+        carrier_line.set_data([], [])
+        mini_line.set_data([], [])
+        carrier_point.set_data([], [])
+        mini_point.set_data([], [])
+        status_text.set_text("")
+        return carrier_line, mini_line, carrier_point, mini_point, status_text
+
+    def update(index):
+        current_rows = sampled[: index + 1]
+        carrier_line.set_data(
+            [r["carrier_x"] for r in current_rows],
+            [r["carrier_y"] for r in current_rows],
+        )
+        mini_line.set_data(
+            [r["mini_x"] for r in current_rows],
+            [r["mini_y"] for r in current_rows],
+        )
+        latest = current_rows[-1]
+        carrier_point.set_data([latest["carrier_x"]], [latest["carrier_y"]])
+        mini_point.set_data([latest["mini_x"]], [latest["mini_y"]])
+        status_text.set_text(f"t = {latest['t']:.2f} s\nphase = {latest['phase']}")
+        return carrier_line, mini_line, carrier_point, mini_point, status_text
+
+    output_path = output_dir / "trajectory_xy_full.gif"
+    animation = FuncAnimation(
+        fig,
+        update,
+        frames=len(sampled),
+        init_func=init,
+        interval=5,
+        blit=False,
+    )
+    try:
+        animation.save(output_path, writer=PillowWriter(fps=200))
+    except Exception as exc:
+        try:
+            animation.save(
+                output_path,
+                writer=PillowWriter(fps=150),
+                dpi=110,
+                savefig_kwargs={"facecolor": "white", "edgecolor": "white"},
+            )
+        except Exception as fallback_exc:
+            print(f"warning: failed to write trajectory gif ({exc}; fallback={fallback_exc})")
+            plt.close(fig)
+            return None
+    plt.close(fig)
+    return output_path
 
 
 def save_xz_plot(rows, output_dir: Path):
@@ -432,6 +989,52 @@ def save_xz_plot(rows, output_dir: Path):
     ax.legend()
     fig.tight_layout()
     path = output_dir / "trajectory_xz.png"
+    fig.savefig(path)
+    plt.close(fig)
+    return path
+
+
+def save_x_time_plot(rows, output_dir: Path, corridor_plan=None):
+    """X position vs time with corridor plan publish marker."""
+    if not rows:
+        return None
+    ts = [r["t"] - rows[0]["t"] for r in rows]
+    fig, (ax_x, ax_y) = plt.subplots(2, 1, figsize=(10, 6), dpi=140, sharex=True)
+    ax_x.plot(ts, [r["carrier_x"] for r in rows], color="#4daf4a", lw=1.8, label="Carrier X")
+    ax_x.plot(ts, [r["mini_x"] for r in rows], color="#e41a1c", lw=1.5, label="Mini X")
+    ax_x.set_ylabel("X [m]")
+    ax_x.grid(True, alpha=0.3)
+    ax_x.legend(fontsize=7)
+    ax_y.plot(ts, [r["carrier_y"] for r in rows], color="#4daf4a", lw=1.8, label="Carrier Y")
+    ax_y.plot(ts, [r["mini_y"] for r in rows], color="#e41a1c", lw=1.5, label="Mini Y")
+    ax_y.set_ylabel("Y [m]")
+    ax_y.set_xlabel("Time [s]")
+    ax_y.grid(True, alpha=0.3)
+    ax_y.legend(fontsize=7)
+    # Draw corridor plan trajectory on time plot
+    if corridor_plan:
+        hold_sec = corridor_plan.get("hold_sec", 0.0)
+        for a in (ax_x, ax_y):
+            a.axvline(hold_sec, color="magenta", ls="--", lw=1.2, alpha=0.7,
+                      label=f"Departure (hold={hold_sec:.1f}s)")
+            a.axvline(0, color="cyan", ls=":", lw=1.0, alpha=0.5, label="CorridorPlan published")
+        # Draw planned arc trajectory
+        if "arc_M" in corridor_plan:
+            Mx, My = corridor_plan["arc_M"]
+            r = corridor_plan["arc_r"]
+            phi0 = corridor_plan["arc_phi0"]
+            dphi = corridor_plan.get("arc_delta_phi", corridor_plan.get("arc_dphi", 0.0))
+            spd = corridor_plan.get("spd", 1.0)
+            t_dur = r * abs(dphi) / max(spd, 0.1)
+            N = 60
+            plan_ts = [hold_sec + t_dur * i / N for i in range(N + 1)]
+            plan_xs = [Mx + r * math.cos(phi0 + dphi * i / N) for i in range(N + 1)]
+            plan_ys = [My + r * math.sin(phi0 + dphi * i / N) for i in range(N + 1)]
+            ax_x.plot(plan_ts, plan_xs, "m--", lw=1.5, alpha=0.7, label="Plan X")
+            ax_y.plot(plan_ts, plan_ys, "m--", lw=1.5, alpha=0.7, label="Plan Y")
+    fig.suptitle("Position vs Time")
+    fig.tight_layout()
+    path = output_dir / "x_time.png"
     fig.savefig(path)
     plt.close(fig)
     return path
@@ -667,6 +1270,10 @@ def save_fixed_wing_diagnostics_plot(rows, output_dir: Path):
 def save_summary(rows, output_dir: Path, metadata):
     summary = defaultdict(str)
     tangent_metrics = compute_tangent_exit_metrics(rows, metadata, output_dir)
+    path_metrics = compute_path_efficiency_metrics(rows)
+    prehold_start_metrics = compute_prehold_start_metrics(rows, metadata)
+    intercept_metrics = compute_start_intercept_metrics(rows, metadata)
+    accepted_window_metrics = parse_start_window_accept_metrics(output_dir)
     analysis_rows = [
         r for r in rows
         if measured_rel_distance(r) > 1e-6 or r["relative_distance"] > 1e-6
@@ -927,13 +1534,35 @@ def save_summary(rows, output_dir: Path, metadata):
                     summary["mini_wait_altitude_abs_error_mean_m"] = (
                         f"{sum(abs(v) for v in alt_errors) / len(alt_errors):.3f}"
                     )
-                    summary["mini_wait_altitude_abs_error_max_m"] = (
-                        f"{max(abs(v) for v in alt_errors):.3f}"
-                    )
+                summary["mini_wait_altitude_abs_error_max_m"] = (
+                    f"{max(abs(v) for v in alt_errors):.3f}"
+                )
         except ValueError:
             pass
 
+    for key, value in path_metrics.items():
+        if math.isfinite(value):
+            summary[key] = f"{value:.3f}"
+
+    for key, value in prehold_start_metrics.items():
+        if isinstance(value, str):
+            summary[key] = value
+        elif math.isfinite(value):
+            summary[key] = f"{value:.3f}"
+
+    for key, value in intercept_metrics.items():
+        if isinstance(value, str):
+            summary[key] = value
+        elif math.isfinite(value):
+            summary[key] = f"{value:.3f}"
+
     for key, value in tangent_metrics.items():
+        if isinstance(value, str):
+            summary[key] = value
+        elif math.isfinite(value):
+            summary[key] = f"{value:.3f}"
+
+    for key, value in accepted_window_metrics.items():
         if isinstance(value, str):
             summary[key] = value
         elif math.isfinite(value):
@@ -947,30 +1576,53 @@ def save_summary(rows, output_dir: Path, metadata):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: generate_report.py <result_dir>")
+    mock_mode = False
+    args = sys.argv[1:]
+    if args and args[0] == "--mock":
+        mock_mode = True
+        args = args[1:]
+
+    if len(args) != 1:
+        print("usage: generate_report.py [--mock] <result_dir>")
         raise SystemExit(1)
 
-    output_dir = Path(sys.argv[1]).resolve()
+    output_dir = Path(args[0]).resolve()
     rows = load_rows(output_dir / "docking_log.csv")
     metadata = load_metadata(output_dir / "metadata.txt")
     if not rows:
         raise SystemExit("no rows found in docking_log.csv")
 
-    files = [
-        save_distance_plot(rows, output_dir),
-        save_xy_plot(rows, output_dir),
-        save_xz_plot(rows, output_dir),
-        save_speed_plot(rows, output_dir),
-        save_phase_plot(rows, output_dir),
-        save_summary(rows, output_dir, metadata),
-    ]
-    wait_orbit_path = save_wait_orbit_plot(rows, output_dir, metadata)
-    if wait_orbit_path is not None:
-        files.append(wait_orbit_path)
-    diagnostics_path = save_fixed_wing_diagnostics_plot(rows, output_dir)
-    if diagnostics_path is not None:
-        files.append(diagnostics_path)
+    corridor_plan = parse_corridor_plan_from_log(output_dir / "launch.log")
+    if mock_mode:
+        files = [
+            save_speed_plot(rows, output_dir),
+            save_xy_plot(rows, output_dir, corridor_plan),
+            save_xy_animation_gif(rows, output_dir),
+            save_x_time_plot(rows, output_dir, corridor_plan),
+            save_summary(rows, output_dir, metadata),
+        ]
+    else:
+        files = [
+            save_distance_plot(rows, output_dir),
+            save_signed_front_distance_plot(rows, output_dir),
+            save_xy_plot(rows, output_dir),
+            save_xz_plot(rows, output_dir),
+            save_speed_plot(rows, output_dir),
+            save_phase_plot(rows, output_dir),
+            save_summary(rows, output_dir, metadata),
+        ]
+        intercept_diagnostics_path = save_intercept_diagnostics(rows, output_dir, metadata)
+        if intercept_diagnostics_path is not None:
+            files.append(intercept_diagnostics_path)
+        wait_orbit_path = save_wait_orbit_plot(rows, output_dir, metadata)
+        if wait_orbit_path is not None:
+            files.append(wait_orbit_path)
+        diagnostics_path = save_fixed_wing_diagnostics_plot(rows, output_dir)
+        if diagnostics_path is not None:
+            files.append(diagnostics_path)
+        xy_gif_path = save_xy_animation_gif(rows, output_dir)
+        if xy_gif_path is not None:
+            files.append(xy_gif_path)
 
     manifest = output_dir / "artifacts.txt"
     with manifest.open("w", encoding="utf-8") as file:

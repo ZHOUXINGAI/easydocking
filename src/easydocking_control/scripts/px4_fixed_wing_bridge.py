@@ -4,7 +4,7 @@ import math
 from typing import Optional
 
 import rclpy
-from easydocking_msgs.msg import DockingCommand, DockingStatus
+from easydocking_msgs.msg import CorridorPlan, DockingCommand, DockingStatus
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
@@ -129,16 +129,19 @@ class Px4FixedWingBridge(Node):
         self.declare_parameter("glide_score_weights", [2.0, 1.1, 0.35, 1.5, 1.5, 2.4])
         self.declare_parameter("glide_score_cluster_a_min_projected_abs_y", 3.5)
         self.declare_parameter("close_tracking_release_enabled", True)
-        self.declare_parameter("close_tracking_release_min_distance", 8.0)
-        self.declare_parameter("close_tracking_release_max_distance", 15.0)
-        self.declare_parameter("close_tracking_release_min_rel_x", -11.5)
-        self.declare_parameter("close_tracking_release_max_rel_x", 6.5)
-        self.declare_parameter("close_tracking_release_min_rel_y", 3.0)
-        self.declare_parameter("close_tracking_release_max_rel_y", 11.0)
-        self.declare_parameter("close_tracking_release_min_rel_vx", -6.5)
-        self.declare_parameter("close_tracking_release_max_rel_vx", -2.8)
-        self.declare_parameter("close_tracking_release_min_rel_vy", -4.2)
-        self.declare_parameter("close_tracking_release_max_rel_vy", 5.5)
+        self.declare_parameter("close_tracking_release_allow_approach", True)
+        self.declare_parameter("close_tracking_release_min_distance", 10.0)
+        self.declare_parameter("close_tracking_release_max_distance", 20.0)
+        self.declare_parameter("close_tracking_release_min_rel_x", -9.0)
+        self.declare_parameter("close_tracking_release_max_rel_x", 3.5)
+        self.declare_parameter("close_tracking_release_min_rel_y", 2.0)
+        self.declare_parameter("close_tracking_release_max_rel_y", 9.5)
+        self.declare_parameter("close_tracking_release_min_rel_vx", -2.2)
+        self.declare_parameter("close_tracking_release_max_rel_vx", 2.4)
+        self.declare_parameter("close_tracking_release_min_rel_vy", -3.2)
+        self.declare_parameter("close_tracking_release_max_rel_vy", 1.6)
+        self.declare_parameter("close_tracking_release_min_closing_rate", -4.5)
+        self.declare_parameter("close_tracking_release_max_closing_rate", -0.35)
         self.declare_parameter("glide_tangent_exit_enable", True)
         self.declare_parameter("glide_tangent_exit_min_hold_sec", 5.0)
         self.declare_parameter("glide_tangent_exit_hold_sec", 6.0)
@@ -186,6 +189,8 @@ class Px4FixedWingBridge(Node):
         self.declare_parameter("orbit_recenter_distance_ratio", 1.3)
         self.declare_parameter("allow_orbit_recentering", False)
         self.declare_parameter("native_wait_orbit_refresh_sec", 4.0)
+        self.declare_parameter("arm_retry_period_sec", 1.0)
+        self.declare_parameter("arm_retry_timeout_sec", 20.0)
 
         if any(obj is None for obj in [
             AirspeedValidated,
@@ -288,6 +293,9 @@ class Px4FixedWingBridge(Node):
         self.close_tracking_release_enabled = bool(
             self.get_parameter("close_tracking_release_enabled").value
         )
+        self.close_tracking_release_allow_approach = bool(
+            self.get_parameter("close_tracking_release_allow_approach").value
+        )
         self.close_tracking_release_min_distance = float(
             self.get_parameter("close_tracking_release_min_distance").value
         )
@@ -317,6 +325,12 @@ class Px4FixedWingBridge(Node):
         )
         self.close_tracking_release_max_rel_vy = float(
             self.get_parameter("close_tracking_release_max_rel_vy").value
+        )
+        self.close_tracking_release_min_closing_rate = float(
+            self.get_parameter("close_tracking_release_min_closing_rate").value
+        )
+        self.close_tracking_release_max_closing_rate = float(
+            self.get_parameter("close_tracking_release_max_closing_rate").value
         )
         self.glide_tangent_exit_enable = bool(
             self.get_parameter("glide_tangent_exit_enable").value
@@ -430,6 +444,14 @@ class Px4FixedWingBridge(Node):
         self.native_wait_orbit_refresh_sec = float(
             self.get_parameter("native_wait_orbit_refresh_sec").value
         )
+        self.arm_retry_period_sec = max(
+            0.2,
+            float(self.get_parameter("arm_retry_period_sec").value),
+        )
+        self.arm_retry_timeout_sec = max(
+            self.arm_retry_period_sec,
+            float(self.get_parameter("arm_retry_timeout_sec").value),
+        )
 
         self.start_requested = False
         self.commanded_start = False
@@ -465,6 +487,7 @@ class Px4FixedWingBridge(Node):
         self.approach_axis_world = [1.0, 0.0]
         self.terminal_straight_active = False
         self.terminal_straight_start_time_sec: Optional[float] = None
+        self.terminal_straight_best_distance = math.inf
         self.terminal_sync_active = False
         self.terminal_exit_axis_world = [1.0, 0.0]
         self.terminal_exit_anchor_world = [0.0, 0.0]
@@ -481,6 +504,9 @@ class Px4FixedWingBridge(Node):
         self.takeoff_sent_time_sec = None
         self.takeoff_reference_alt_m = None
         self.takeoff_target_alt_m = None
+        self.first_arm_attempt_time_sec = None
+        self.last_arm_command_time_sec = None
+        self.last_arm_retry_warn_time_sec = None
         self.last_status_debug_time_sec = None
         self.last_logged_nav_state = None
         self.last_logged_arming_state = None
@@ -512,6 +538,7 @@ class Px4FixedWingBridge(Node):
         self.create_subscription(DockingCommand, "/docking/command", self._direct_command_cb, 10)
         self.create_subscription(DockingCommand, "/docking/command_latched", self._latched_command_cb, latched_qos)
         self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
+        self.create_subscription(CorridorPlan, "/docking/corridor_plan", self._corridor_cb, 10)
         self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10)
         self.create_subscription(
             VehicleStatus, f"{self.px4_namespace}/fmu/out/vehicle_status_v2", self._vehicle_status_cb, px4_qos
@@ -588,6 +615,14 @@ class Px4FixedWingBridge(Node):
         self.debug_timer = self.create_timer(0.05, self._publish_terminal_sync_debug)
         self.energy_guard_last_active = False
 
+        self._last_corridor_plan: Optional[CorridorPlan] = None
+        self._corridor_plan_id_seen = 0
+
+    def _corridor_cb(self, msg: CorridorPlan) -> None:
+        if msg.plan_id != self._corridor_plan_id_seen:
+            self._corridor_plan_id_seen = msg.plan_id
+        self._last_corridor_plan = msg
+
     def _direct_command_cb(self, msg: DockingCommand) -> None:
         self._handle_command(msg)
 
@@ -638,6 +673,7 @@ class Px4FixedWingBridge(Node):
             self.wait_loiter_active = False
             self.terminal_straight_active = False
             self.terminal_straight_start_time_sec = None
+            self.terminal_straight_best_distance = math.inf
             self.terminal_sync_active = False
             self.terminal_exit_axis_world = [1.0, 0.0]
             self.terminal_exit_anchor_world = [0.0, 0.0]
@@ -649,6 +685,9 @@ class Px4FixedWingBridge(Node):
             self.takeoff_sent_time_sec = None
             self.takeoff_reference_alt_m = None
             self.takeoff_target_alt_m = None
+            self.first_arm_attempt_time_sec = None
+            self.last_arm_command_time_sec = None
+            self.last_arm_retry_warn_time_sec = None
             self.last_status_debug_time_sec = None
             self.last_docking_phase = "IDLE"
             if command == "RESET":
@@ -734,6 +773,30 @@ class Px4FixedWingBridge(Node):
             self.takeoff_sent = True
             return
 
+        if int(self.vehicle_status.arming_state) != int(VehicleStatus.ARMING_STATE_ARMED):
+            now_sec = self.get_clock().now().nanoseconds * 1e-9
+            should_retry = (
+                self.last_arm_command_time_sec is None or
+                (now_sec - self.last_arm_command_time_sec) >= self.arm_retry_period_sec
+            )
+            if should_retry:
+                self._send_arm()
+                self._send_takeoff()
+            if (
+                self.first_arm_attempt_time_sec is not None and
+                (now_sec - self.first_arm_attempt_time_sec) >= self.arm_retry_timeout_sec
+            ):
+                if (
+                    self.last_arm_retry_warn_time_sec is None or
+                    (now_sec - self.last_arm_retry_warn_time_sec) >= self.arm_retry_timeout_sec
+                ):
+                    self.last_arm_retry_warn_time_sec = now_sec
+                    self.get_logger().warn(
+                        "fixed-wing: arm timeout, still disarmed "
+                        f"after {self.arm_retry_timeout_sec:.1f}s"
+                    )
+            return
+
         if self.start_requested and self._should_start_glide():
             if not self.glide_active:
                 phase = self.docking_status.phase.upper() if self.docking_status is not None else "IDLE"
@@ -816,12 +879,73 @@ class Px4FixedWingBridge(Node):
                 float(self.docking_status.relative_distance)
                 if self.docking_status is not None else math.inf
             )
+            if math.isfinite(current_distance):
+                self.terminal_straight_best_distance = min(
+                    self.terminal_straight_best_distance,
+                    current_distance,
+                )
             straight_elapsed = max(0.0, now_sec - self.terminal_straight_start_time_sec)
+            if phase == "DOCKING" and math.isfinite(current_distance):
+                dock_realign_timeout = max(self.glide_tangent_exit_hold_sec + 6.0, 10.0)
+                entry_distance = (
+                    self.terminal_entry_distance
+                    if math.isfinite(self.terminal_entry_distance) else current_distance
+                )
+                best_distance = (
+                    self.terminal_straight_best_distance
+                    if math.isfinite(self.terminal_straight_best_distance) else current_distance
+                )
+                progress_distance = max(0.0, entry_distance - best_distance)
+                still_far = current_distance > max(self.capture_distance + 0.9, 1.8)
+                weak_sync = (
+                    not self.terminal_sync_release_ready and
+                    self.terminal_sync_best_score < 0.78
+                )
+                should_realign = (
+                    straight_elapsed >= dock_realign_timeout and
+                    (
+                        (progress_distance < 1.2 and still_far) or
+                        (still_far and weak_sync and straight_elapsed >= dock_realign_timeout + 2.0)
+                    )
+                )
+                if should_realign:
+                    self.glide_tangent_exit_history_valid = False
+                    self._seed_approach_axis_from_current_flight_path()
+                    self._clear_terminal_straight_state(
+                        reason=(
+                            f"docking_realign elapsed={straight_elapsed:.3f} "
+                            f"entry={entry_distance:.3f} "
+                            f"best={best_distance:.3f} "
+                            f"distance={current_distance:.3f} "
+                            f"sync_best={self.terminal_sync_best_score:.3f}"
+                        )
+                    )
+                    return
             reopen_distance = max(
                 self.terminal_slowdown_start_distance + 5.0,
                 self.terminal_entry_distance + 8.0,
                 12.0,
             )
+            tracking_reopen_distance = max(
+                self.capture_distance + 0.8,
+                1.6,
+            )
+            if (
+                phase == "TRACKING" and
+                math.isfinite(current_distance) and
+                straight_elapsed >= 1.5 and
+                current_distance >= tracking_reopen_distance
+            ):
+                self.glide_tangent_exit_history_valid = False
+                self._seed_approach_axis_from_current_flight_path()
+                self._clear_terminal_straight_state(
+                    reason=(
+                        f"tracking_reopen distance={current_distance:.3f} "
+                        f"entry={self.terminal_entry_distance:.3f} "
+                        f"elapsed={straight_elapsed:.3f}"
+                    )
+                )
+                return
             if (
                 phase == "APPROACH" and
                 math.isfinite(current_distance) and
@@ -874,6 +998,7 @@ class Px4FixedWingBridge(Node):
             self.terminal_exit_anchor_world = anchor_world
             self.terminal_exit_altitude = anchor_altitude
             self.terminal_entry_distance = float(self.docking_status.relative_distance)
+            self.terminal_straight_best_distance = self.terminal_entry_distance
             self.get_logger().info(
                 "fixed-wing: terminal straight-line mode armed "
                 f"phase={phase} "
@@ -1126,6 +1251,7 @@ class Px4FixedWingBridge(Node):
             self.get_logger().info(f"fixed-wing: terminal straight cleared reason={reason}")
         self.terminal_straight_active = False
         self.terminal_straight_start_time_sec = None
+        self.terminal_straight_best_distance = math.inf
         self.terminal_sync_active = False
         self.terminal_exit_axis_world = [1.0, 0.0]
         self.terminal_exit_anchor_world = [0.0, 0.0]
@@ -1287,6 +1413,10 @@ class Px4FixedWingBridge(Node):
         self.energy_debug_pub.publish(energy_msg)
 
     def _send_arm(self) -> None:
+        now_sec = self.get_clock().now().nanoseconds * 1e-9
+        if self.first_arm_attempt_time_sec is None:
+            self.first_arm_attempt_time_sec = now_sec
+        self.last_arm_command_time_sec = now_sec
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
 
     def _send_takeoff(self) -> None:
@@ -1649,7 +1779,9 @@ class Px4FixedWingBridge(Node):
         if not self.close_tracking_release_enabled:
             return False, "disabled"
         phase = str(metrics["phase"])
-        if phase != "TRACKING":
+        allow_approach = self.close_tracking_release_allow_approach
+        phase_ok = phase == "TRACKING" or (allow_approach and phase == "APPROACH")
+        if not phase_ok:
             return False, f"phase={phase}"
 
         distance = float(metrics["relative_distance"])
@@ -1657,19 +1789,21 @@ class Px4FixedWingBridge(Node):
         rel_y = float(metrics["rel_y"])
         rel_vx = float(metrics["rel_vx"])
         rel_vy = float(metrics["rel_vy"])
+        closing_rate = float(metrics["closing_rate"])
         window_ok = (
             self.close_tracking_release_min_distance <= distance <= self.close_tracking_release_max_distance and
             self.close_tracking_release_min_rel_x <= rel_x <= self.close_tracking_release_max_rel_x and
             self.close_tracking_release_min_rel_y <= rel_y <= self.close_tracking_release_max_rel_y and
             self.close_tracking_release_min_rel_vx <= rel_vx <= self.close_tracking_release_max_rel_vx and
-            self.close_tracking_release_min_rel_vy <= rel_vy <= self.close_tracking_release_max_rel_vy
+            self.close_tracking_release_min_rel_vy <= rel_vy <= self.close_tracking_release_max_rel_vy and
+            self.close_tracking_release_min_closing_rate <= closing_rate <= self.close_tracking_release_max_closing_rate
         )
         if window_ok:
             return True, "close_tracking"
 
         return False, (
             f"distance={distance:.3f},rel_x={rel_x:.3f},rel_y={rel_y:.3f},"
-            f"rel_vx={rel_vx:.3f},rel_vy={rel_vy:.3f}"
+            f"rel_vx={rel_vx:.3f},rel_vy={rel_vy:.3f},closing={closing_rate:.3f}"
         )
 
     def _should_start_glide_score_state_machine(self) -> bool:
@@ -1790,6 +1924,23 @@ class Px4FixedWingBridge(Node):
         phase = self.docking_status.phase.upper()
         if phase in {"DOCKING", "COMPLETED"}:
             return True
+        # ── 走廊式 glide 触发：根据 CorridorPlan 中的轨道相位门限 ──
+        if self._last_corridor_plan is not None and self._last_corridor_plan.corridor_valid:
+            if self.vehicle_local_position is not None and hasattr(self, 'orbit_center') and self.orbit_center is not None:
+                mini_x = self.vehicle_local_position.x  # world frame
+                mini_y = self.vehicle_local_position.y
+                radial_x = mini_x - self.orbit_center[0]
+                radial_y = mini_y - self.orbit_center[1]
+                mini_phase = math.atan2(radial_y, radial_x)
+                trigger_phase = self._last_corridor_plan.mini_orbit_phase_trigger_rad
+                # 将相位差归一化到 [-π, π]
+                phase_diff = (mini_phase - trigger_phase + math.pi) % (2 * math.pi) - math.pi
+                if abs(phase_diff) < 0.15:  # ~8.6° 窗口
+                    self.get_logger().info(
+                        f"corridor glide trigger: mini_phase={math.degrees(mini_phase):.1f}° "
+                        f"trigger={math.degrees(trigger_phase):.1f}° diff={math.degrees(phase_diff):.1f}°"
+                    )
+                    return True
         if self.glide_release_mode == "score_state_machine":
             return self._should_start_glide_score_state_machine()
         if phase != self.glide_trigger_phase:

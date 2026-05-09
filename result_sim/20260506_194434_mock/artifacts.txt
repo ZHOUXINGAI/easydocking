@@ -1,0 +1,10 @@
+distance_convergence.png
+carrier_front_back_signed_distance.png
+trajectory_xy.png
+trajectory_xz.png
+speed_profile.png
+phase_timeline.png
+summary.txt
+intercept_diagnostics.txt
+fixed_wing_wait_diagnostics.png
+trajectory_xy_full.gif

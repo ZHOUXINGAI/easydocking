@@ -231,6 +231,16 @@ class ExperimentLogger(Node):
             "controller_corridor_release_armed",
             "controller_corridor_release_accept_counter",
             "controller_completion_hold_counter",
+            "controller_tracking_rearm_guard_enabled",
+            "controller_tracking_rearm_guard_used",
+            "controller_tracking_rearm_last_trigger_code",
+            "controller_passive_docking_entry_count",
+            "controller_passive_docking_last_exit_trigger_code",
+            "controller_debug_25",
+            "controller_debug_26",
+            "controller_debug_27",
+            "controller_debug_28",
+            "controller_debug_29",
         ])
 
         self.carrier_position = [0.0, 0.0, 0.0]
@@ -276,7 +286,7 @@ class ExperimentLogger(Node):
         self.mini_terminal_sync_debug = [math.nan] * 16
         self.mini_handoff_debug = [math.nan] * 6
         self.mini_energy_debug = [math.nan] * 6
-        self.controller_debug = [math.nan] * 20
+        self.controller_debug = [math.nan] * 30
 
         self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
         self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10)
@@ -519,9 +529,9 @@ class ExperimentLogger(Node):
         self.mini_energy_debug = [float(value) for value in msg.data[:6]]
 
     def _controller_debug_cb(self, msg: Float64MultiArray) -> None:
-        if len(msg.data) < 20:
+        if len(msg.data) < 25:
             return
-        self.controller_debug = [float(value) for value in msg.data[:20]]
+        self.controller_debug = [float(value) for value in msg.data[:30]]
 
     def _flush_row(self) -> None:
         if (
@@ -680,6 +690,16 @@ class ExperimentLogger(Node):
             f"{self.controller_debug[17]:.6f}",
             f"{self.controller_debug[18]:.6f}",
             f"{self.controller_debug[19]:.6f}",
+            f"{self.controller_debug[20]:.6f}",
+            f"{self.controller_debug[21]:.6f}",
+            f"{self.controller_debug[22]:.6f}",
+            f"{self.controller_debug[23]:.6f}",
+            f"{self.controller_debug[24]:.6f}",
+            f"{self.controller_debug[25]:.6f}",
+            f"{self.controller_debug[26]:.6f}",
+            f"{self.controller_debug[27]:.6f}",
+            f"{self.controller_debug[28]:.6f}",
+            f"{self.controller_debug[29]:.6f}",
         ])
         self.rows_written += 1
 

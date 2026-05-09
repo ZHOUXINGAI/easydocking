@@ -1,0 +1,3 @@
+run_id,final_pass,first_tracking_t_sec,first_docking_t_sec,first_completed_t_sec,ahead_ratio_positive_pre_completed,ahead_min_m,docking_ahead_ratio_positive,docking_ahead_min_m,docking_lateral_abs_max_m,carrier_path_until_completed_m
+20260414_230210_px4_sih,0,82.0,91.1,nan,0.8374164810690423,-1.961338812742214,0.35398230088495575,-1.961338812742214,0.793859,124.94073375981432
+20260414_230457_px4_sih,1,82.38,91.04,97.84,0.8779956427015251,-1.2368732254903356,0.6102941176470589,-1.2368732254903356,1.440783,127.17851780005432

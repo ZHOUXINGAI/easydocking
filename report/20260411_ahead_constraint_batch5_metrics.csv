@@ -1,0 +1,6 @@
+run_id,classification,final_pass,final_phase,first_non_idle_t_sec,ahead_ratio_positive_pre_completed,ahead_min_m,ahead_sign_flip_count
+20260411_231604_px4_sih,final-pass,1,COMPLETED,103.10,0.842,-2.176,7
+20260411_231916_px4_sih,final-pass,1,COMPLETED,77.64,0.822,-1.481,4
+20260411_232203_px4_sih,final-pass,1,COMPLETED,77.30,0.655,-3.684,5
+20260411_232454_px4_sih,final-pass,1,COMPLETED,76.04,0.660,-2.786,5
+20260411_232743_px4_sih,final-pass,1,COMPLETED,107.70,0.805,-2.305,5

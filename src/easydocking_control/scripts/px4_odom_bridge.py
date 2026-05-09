@@ -39,10 +39,12 @@ class Px4OdomBridge(Node):
         ]
         self.controller_active = False
         self.current_phase = "IDLE"
-        self.arming_state = VehicleStatus.ARMING_STATE_DISARMED
+        self.arming_state = None
         self.frozen_odom = None
         self.carrier_odom = None
         self.local_position = None
+        self.last_odom_received_time_sec = None
+        self.local_position_fallback_logged = False
 
         self.publisher = self.create_publisher(Odometry, f"/{self.uav_name}/odom", 10)
         px4_qos = QoSProfile(
@@ -50,24 +52,9 @@ class Px4OdomBridge(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self.create_subscription(
-            VehicleOdometry,
-            f"{self.px4_namespace}/fmu/out/vehicle_odometry",
-            self._odom_cb,
-            px4_qos,
-        )
-        self.create_subscription(
-            VehicleStatus,
-            f"{self.px4_namespace}/fmu/out/vehicle_status_v2",
-            self._vehicle_status_cb,
-            px4_qos,
-        )
-        self.create_subscription(
-            VehicleLocalPosition,
-            f"{self.px4_namespace}/fmu/out/vehicle_local_position_v1",
-            self._local_position_cb,
-            px4_qos,
-        )
+        self._subscribe_vehicle_odometry_topics(px4_qos)
+        self._subscribe_vehicle_status_topics(px4_qos)
+        self._subscribe_local_position_topics(px4_qos)
         self.create_subscription(
             DockingStatus,
             "/docking/status",
@@ -85,6 +72,51 @@ class Px4OdomBridge(Node):
     def _vehicle_status_cb(self, msg: VehicleStatus) -> None:
         self.arming_state = int(msg.arming_state)
 
+    def _subscribe_vehicle_odometry_topics(self, px4_qos: QoSProfile) -> None:
+        topics = (
+            "vehicle_odometry",
+            "vehicle_odometry_v1",
+            "vehicle_odometry_v2",
+            "vehicle_odometry_v3",
+        )
+        for topic in topics:
+            self.create_subscription(
+                VehicleOdometry,
+                f"{self.px4_namespace}/fmu/out/{topic}",
+                lambda msg, topic_name=topic: self._odom_cb(msg, topic_name),
+                px4_qos,
+            )
+
+    def _subscribe_vehicle_status_topics(self, px4_qos: QoSProfile) -> None:
+        topics = (
+            "vehicle_status",
+            "vehicle_status_v1",
+            "vehicle_status_v2",
+            "vehicle_status_v3",
+        )
+        for topic in topics:
+            self.create_subscription(
+                VehicleStatus,
+                f"{self.px4_namespace}/fmu/out/{topic}",
+                self._vehicle_status_cb,
+                px4_qos,
+            )
+
+    def _subscribe_local_position_topics(self, px4_qos: QoSProfile) -> None:
+        topics = (
+            "vehicle_local_position",
+            "vehicle_local_position_v1",
+            "vehicle_local_position_v2",
+            "vehicle_local_position_v3",
+        )
+        for topic in topics:
+            self.create_subscription(
+                VehicleLocalPosition,
+                f"{self.px4_namespace}/fmu/out/{topic}",
+                lambda msg, topic_name=topic: self._local_position_cb(msg, topic_name),
+                px4_qos,
+            )
+
     def _status_cb(self, msg: DockingStatus) -> None:
         self.controller_active = bool(msg.is_active)
         self.current_phase = msg.phase.upper()
@@ -92,8 +124,31 @@ class Px4OdomBridge(Node):
     def _carrier_odom_cb(self, msg: Odometry) -> None:
         self.carrier_odom = msg
 
-    def _local_position_cb(self, msg: VehicleLocalPosition) -> None:
+    def _local_position_cb(
+        self,
+        msg: VehicleLocalPosition,
+        source_topic: str = "vehicle_local_position",
+    ) -> None:
         self.local_position = msg
+        if (
+            self.uav_name == "mini" and
+            self.current_phase == "COMPLETED" and
+            self.carrier_odom is not None
+        ):
+            self.publisher.publish(self._build_attached_odom(self.get_clock().now().to_msg()))
+            return
+        now_sec = self.get_clock().now().nanoseconds * 1e-9
+        if (
+            self.last_odom_received_time_sec is not None and
+            (now_sec - self.last_odom_received_time_sec) <= 0.40
+        ):
+            return
+        if not self.local_position_fallback_logged:
+            self.local_position_fallback_logged = True
+            self.get_logger().warn(
+                f"{self.uav_name}: using local_position fallback odom from {source_topic}"
+            )
+        self._publish_with_freeze(self._build_odom_from_local_position(msg))
 
     def _build_attached_odom(self, stamp) -> Odometry:
         assert self.carrier_odom is not None
@@ -114,7 +169,11 @@ class Px4OdomBridge(Node):
         odom.twist = self.carrier_odom.twist
         return odom
 
-    def _odom_cb(self, msg: VehicleOdometry) -> None:
+    def _odom_cb(
+        self,
+        msg: VehicleOdometry,
+        source_topic: str = "vehicle_odometry",
+    ) -> None:
         if (
             self.uav_name == "mini" and
             self.current_phase == "COMPLETED" and
@@ -123,6 +182,16 @@ class Px4OdomBridge(Node):
             self.publisher.publish(self._build_attached_odom(self.get_clock().now().to_msg()))
             return
 
+        self.last_odom_received_time_sec = self.get_clock().now().nanoseconds * 1e-9
+        if self.local_position_fallback_logged:
+            self.local_position_fallback_logged = False
+            self.get_logger().info(
+                f"{self.uav_name}: switched back to vehicle_odometry source={source_topic}"
+            )
+        odom = self._build_odom_from_vehicle_odometry(msg)
+        self._publish_with_freeze(odom)
+
+    def _build_odom_from_vehicle_odometry(self, msg: VehicleOdometry) -> Odometry:
         odom = Odometry()
         odom.header.stamp = self.get_clock().now().to_msg()
         odom.header.frame_id = self.world_frame
@@ -140,9 +209,32 @@ class Px4OdomBridge(Node):
         odom.twist.twist.angular.x = float(msg.angular_velocity[0])
         odom.twist.twist.angular.y = float(msg.angular_velocity[1])
         odom.twist.twist.angular.z = float(msg.angular_velocity[2])
+        return odom
 
+    def _build_odom_from_local_position(self, msg: VehicleLocalPosition) -> Odometry:
+        odom = Odometry()
+        odom.header.stamp = self.get_clock().now().to_msg()
+        odom.header.frame_id = self.world_frame
+        odom.child_frame_id = f"{self.uav_name}/base_link"
+        odom.pose.pose.position.x = self.world_offset[0] + float(msg.x)
+        odom.pose.pose.position.y = self.world_offset[1] + float(msg.y)
+        odom.pose.pose.position.z = self.world_offset[2] - float(msg.z)
+        odom.twist.twist.linear.x = float(msg.vx)
+        odom.twist.twist.linear.y = float(msg.vy)
+        odom.twist.twist.linear.z = -float(msg.vz)
+        if self.frozen_odom is not None:
+            odom.pose.pose.orientation = self.frozen_odom.pose.pose.orientation
+        else:
+            odom.pose.pose.orientation.w = 1.0
+            odom.pose.pose.orientation.x = 0.0
+            odom.pose.pose.orientation.y = 0.0
+            odom.pose.pose.orientation.z = 0.0
+        return odom
+
+    def _publish_with_freeze(self, odom: Odometry) -> None:
         should_freeze = (
             not self.controller_active and
+            self.arming_state is not None and
             self.arming_state == VehicleStatus.ARMING_STATE_DISARMED
         )
         if should_freeze:

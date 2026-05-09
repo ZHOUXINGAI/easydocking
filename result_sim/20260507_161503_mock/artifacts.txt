@@ -1,0 +1,4 @@
+speed_profile.png
+trajectory_xy.png
+trajectory_xy_full.gif
+summary.txt

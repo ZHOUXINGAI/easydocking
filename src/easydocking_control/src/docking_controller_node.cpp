@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -9,6 +10,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/qos.hpp>
+#include <easydocking_msgs/msg/corridor_plan.hpp>
 #include <easydocking_msgs/msg/docking_command.hpp>
 #include <easydocking_msgs/msg/docking_status.hpp>
 #include <easydocking_msgs/msg/relative_pose.hpp>
@@ -63,6 +65,11 @@ private:
     this->declare_parameter("carrier_max_accel", 2.5);
     this->declare_parameter("intercept_lookahead", 1.5);
     this->declare_parameter("docking_speed_threshold", 1.0);
+    this->declare_parameter("mini_orbit_radius", 55.0);
+    this->declare_parameter("mini_orbit_speed", 10.0);
+    this->declare_parameter("mini_orbit_center_x", 10.0);
+    this->declare_parameter("mini_orbit_center_y", -6.0);
+    this->declare_parameter("carrier_departure_min_orbit_fraction", 0.35);
   }
 
   void configureController()
@@ -97,6 +104,15 @@ private:
       this->get_parameter("carrier_max_accel").as_double());
     controller_->setInterceptLookahead(this->get_parameter("intercept_lookahead").as_double());
     controller_->setDockingSpeedThreshold(this->get_parameter("docking_speed_threshold").as_double());
+    controller_->setMiniOrbitModel(
+      this->get_parameter("mini_orbit_radius").as_double(),
+      this->get_parameter("mini_orbit_speed").as_double(),
+      Eigen::Vector3d(
+        this->get_parameter("mini_orbit_center_x").as_double(),
+        this->get_parameter("mini_orbit_center_y").as_double(),
+        0.0));
+    controller_->setCarrierDepartureMinOrbitFraction(
+      this->get_parameter("carrier_departure_min_orbit_fraction").as_double());
   }
 
   void createInterfaces()
@@ -131,6 +147,8 @@ private:
       this->create_publisher<easydocking_msgs::msg::DockingStatus>("/docking/status", 10);
     controller_debug_pub_ =
       this->create_publisher<std_msgs::msg::Float64MultiArray>("/docking/controller_debug", 10);
+    corridor_plan_pub_ =
+      this->create_publisher<easydocking_msgs::msg::CorridorPlan>("/docking/corridor_plan", 10);
   }
 
   void carrierOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -192,6 +210,11 @@ private:
     geometry_msgs::msg::Twist carrier_cmd;
     geometry_msgs::msg::Twist mini_cmd;
     controller_->computeControlCommands(carrier_cmd, mini_cmd);
+
+    // Publish corridor plan once when newly computed
+    if (controller_->hasNewCorridorPlan()) {
+      publishCorridorPlan();
+    }
 
     publishVelocitySetpoint("carrier", carrier_cmd, carrier_velocity_pub_);
     publishVelocitySetpoint("mini", mini_cmd, mini_velocity_pub_);
@@ -292,6 +315,61 @@ private:
     controller_debug_pub_->publish(msg);
   }
 
+  void publishCorridorPlan()
+  {
+    easydocking_msgs::msg::CorridorPlan msg;
+    msg.header.stamp = this->get_clock()->now();
+    msg.header.frame_id = this->get_parameter("world_frame").as_string();
+
+    const auto& T = controller_->getCorridorTangentPoint();
+    const auto& dir = controller_->getCorridorTangentDir();
+    const double hold_dur = controller_->getCorridorHoldDuration();
+    const auto& center = controller_->getMiniOrbitCenter();
+
+    msg.rendezvous_x = T.x();
+    msg.rendezvous_y = T.y();
+    msg.rendezvous_z = T.z();
+
+    msg.tangent_dir_x = dir.x();
+    msg.tangent_dir_y = dir.y();
+
+    constexpr double corridor_length = 60.0;
+    constexpr double ahead_distance = 15.0;
+    msg.corridor_length = corridor_length;
+    msg.ahead_distance = ahead_distance;
+
+    msg.carrier_start_x = T.x() - dir.x() * ahead_distance;
+    msg.carrier_start_y = T.y() - dir.y() * ahead_distance;
+    msg.carrier_target_x = T.x() + dir.x() * corridor_length;
+    msg.carrier_target_y = T.y() + dir.y() * corridor_length;
+
+    msg.mini_arrival_time =
+      static_cast<double>(this->get_clock()->now().seconds())
+      + controller_->getCorridorMiniArrivalDelay();
+
+    // Compute mini_orbit_phase_trigger_rad: the orbital phase of the tangent point
+    double trigger_phase = std::atan2(T.y() - center.y(), T.x() - center.x());
+    while (trigger_phase < 0.0) { trigger_phase += 2.0 * M_PI; }
+    while (trigger_phase >= 2.0 * M_PI) { trigger_phase -= 2.0 * M_PI; }
+    msg.mini_orbit_phase_trigger_rad = trigger_phase;
+
+    msg.corridor_valid = true;
+    msg.plan_id = static_cast<int32_t>(this->get_clock()->now().seconds() * 1000);
+
+    corridor_plan_pub_->publish(msg);
+    controller_->markCorridorPlanPublished();
+
+    RCLCPP_INFO(this->get_logger(),
+      "DBG hold_dur=%.3f CorridorPlan: T=(%.1f,%.1f) dir=(%.2f,%.2f) hold=%.1fs spd=%.1fm/s "
+      "arc_M=(%.1f,%.1f) arc_r=%.1f arc_phi0=%.2f arc_dphi=%.2f trigger_phase=%.1fdeg",
+      hold_dur, T.x(), T.y(), dir.x(), dir.y(), hold_dur,
+      controller_->getCorridorPlannedSpeed(),
+      controller_->getCorridorArcCenterX(), controller_->getCorridorArcCenterY(),
+      controller_->getCorridorArcRadius(),
+      controller_->getCorridorArcPhiStart(), controller_->getCorridorArcDeltaPhi(),
+      trigger_phase * 180.0 / M_PI);
+  }
+
   std::unique_ptr<DockingController> controller_;
   nav_msgs::msg::Odometry carrier_odom_;
   nav_msgs::msg::Odometry mini_odom_;
@@ -311,6 +389,7 @@ private:
   rclcpp::Publisher<easydocking_msgs::msg::DockingStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr controller_debug_pub_;
   rclcpp::Publisher<easydocking_msgs::msg::DockingCommand>::SharedPtr command_latched_pub_;
+  rclcpp::Publisher<easydocking_msgs::msg::CorridorPlan>::SharedPtr corridor_plan_pub_;
 
   rclcpp::TimerBase::SharedPtr control_timer_;
 };

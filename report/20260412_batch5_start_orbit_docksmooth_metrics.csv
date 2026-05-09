@@ -1,0 +1,6 @@
+run_id,classification,final_pass,first_non_idle_t_sec,approach_sec,tracking_sec,docking_sec,ahead_ratio_positive_pre_completed,ahead_min_m,ahead_sign_flip_count,approach_carrier_orbit_gap_mean_m,approach_carrier_orbit_gap_min_m,docking_lateral_sign_flip_count,docking_lateral_abs_max_m
+20260412_141651_px4_sih,final-pass,1,107.70,17.50,3.20,5.00,0.914,-0.734,4,5.36,2.28,1,1.968
+20260412_142010_px4_sih,final-pass,1,76.16,17.86,3.20,4.00,0.924,-0.872,3,4.65,2.24,1,1.578
+20260412_142256_px4_sih,final-pass,1,76.84,18.20,2.98,6.12,0.936,-0.694,3,5.54,2.30,3,2.054
+20260412_142546_px4_sih,final-pass,1,76.12,18.34,3.36,6.20,0.896,-1.779,5,5.00,2.34,3,2.316
+20260412_142833_px4_sih,final-pass,1,77.70,18.10,3.10,6.00,0.881,-1.175,6,5.53,2.32,2,2.172
