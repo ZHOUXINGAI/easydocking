@@ -67,6 +67,7 @@ private:
     this->declare_parameter("docking_speed_threshold", 1.0);
     this->declare_parameter("mini_orbit_radius", 55.0);
     this->declare_parameter("mini_orbit_speed", 10.0);
+    this->declare_parameter("mini_orbit_start_phase_deg", 30.0);
     this->declare_parameter("mini_orbit_center_x", 10.0);
     this->declare_parameter("mini_orbit_center_y", -6.0);
     this->declare_parameter("carrier_departure_min_orbit_fraction", 0.35);
@@ -104,6 +105,8 @@ private:
       this->get_parameter("carrier_max_accel").as_double());
     controller_->setInterceptLookahead(this->get_parameter("intercept_lookahead").as_double());
     controller_->setDockingSpeedThreshold(this->get_parameter("docking_speed_threshold").as_double());
+    controller_->setMiniOrbitStartPhaseDeg(
+      this->get_parameter("mini_orbit_start_phase_deg").as_double());
     controller_->setMiniOrbitModel(
       this->get_parameter("mini_orbit_radius").as_double(),
       this->get_parameter("mini_orbit_speed").as_double(),
@@ -360,9 +363,9 @@ private:
     controller_->markCorridorPlanPublished();
 
     RCLCPP_INFO(this->get_logger(),
-      "DBG hold_dur=%.3f CorridorPlan: T=(%.1f,%.1f) dir=(%.2f,%.2f) hold=%.1fs spd=%.1fm/s "
+      "CorridorPlan: T=(%.1f,%.1f) dir=(%.2f,%.2f) hold=%.1fs spd=%.1fm/s "
       "arc_M=(%.1f,%.1f) arc_r=%.1f arc_phi0=%.2f arc_dphi=%.2f trigger_phase=%.1fdeg",
-      hold_dur, T.x(), T.y(), dir.x(), dir.y(), hold_dur,
+      T.x(), T.y(), dir.x(), dir.y(), hold_dur,
       controller_->getCorridorPlannedSpeed(),
       controller_->getCorridorArcCenterX(), controller_->getCorridorArcCenterY(),
       controller_->getCorridorArcRadius(),

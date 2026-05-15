@@ -225,6 +225,11 @@ void DockingController::setMiniOrbitModel(double radius, double speed, const Eig
   mini_orbit_center_ = center;
 }
 
+void DockingController::setMiniOrbitStartPhaseDeg(double phase_deg)
+{
+  mini_orbit_start_phase_deg_ = phase_deg;
+}
+
 void DockingController::setCarrierDepartureMinOrbitFraction(double fraction)
 {
   carrier_departure_min_orbit_fraction_ = fraction;
@@ -1167,8 +1172,9 @@ void DockingController::computeCorridorPlan()
 	Eigen::Vector2d T = score_1 >= score_2 ? T1 : T2;
 	Eigen::Vector2d tang = tang_dir(theta_T);
 
-	// Mini timing to T
-	const double theta_m = std::atan2(M.y() - O.y(), M.x() - O.x());
+	// Mini timing: use configured start phase (stable), not current position
+	// (current position is unreliable during PX4 takeoff)
+	const double theta_m = mini_orbit_start_phase_deg_ * M_PI / 180.0;
 	double delta_theta = theta_T - theta_m;
 	if (delta_theta < 0.0) { delta_theta += 2.0 * M_PI; }
 	const double t_mini = delta_theta / omega;
@@ -1316,14 +1322,27 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
       mini_velocity_command_.setZero();
       mini_position_setpoint_ = poseToEigen(mini_pose_);
 
-      // Phase 2: formation flight 3s, then release for quick docking
+      // Phase 2: signed-along feedback gap closure
       if (frac >= 0.99) {
         const double phase2_t = elapsed - corridor_traj_duration_;
+        // Signed gap along tangent: negative = carrier ahead (good), positive = mini ahead (bad)
+        const double signed_gap = relative_pos.dot(corridor_tangent_dir_);
+        double speed;
+        if (signed_gap < -2.0) {
+          // Carrier too far ahead (gap > 2m): slow down, let mini catch up
+          speed = 7.5;
+        } else if (signed_gap > 0) {
+          // Mini ahead! Speed up to overtake and regain front position
+          speed = 8.5;
+        } else {
+          // Gap 0-2m: match mini speed, maintain position
+          speed = 8.0;
+        }
         carrier_position_setpoint_ =
-          corridor_traj_end_ + corridor_tangent_dir_ * 8.0 * phase2_t;
-        carrier_velocity_command_ = corridor_tangent_dir_ * 8.0;
-        if (phase2_t > 3.0) {
-          corridor_plan_valid_ = false;
+          corridor_traj_end_ + corridor_tangent_dir_ * speed * phase2_t;
+        carrier_velocity_command_ = corridor_tangent_dir_ * speed;
+        const double abs_gap = std::abs(signed_gap);
+        if (abs_gap < 2.0 && signed_gap < 0) {
           current_phase_ = DockingPhase::COMPLETED;
         }
         carrier_cmd.linear.x = carrier_velocity_command_(0);

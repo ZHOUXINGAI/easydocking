@@ -619,6 +619,7 @@ class Px4FixedWingBridge(Node):
         self._corridor_plan_id_seen = 0
 
     def _corridor_cb(self, msg: CorridorPlan) -> None:
+        self.get_logger().info(f"CORRIDOR_CB: valid={msg.corridor_valid} arrival={msg.mini_arrival_time:.1f}")
         if msg.plan_id != self._corridor_plan_id_seen:
             self._corridor_plan_id_seen = msg.plan_id
         self._last_corridor_plan = msg
@@ -797,7 +798,13 @@ class Px4FixedWingBridge(Node):
                     )
             return
 
-        if self.start_requested and self._should_start_glide():
+        # CorridorPlan glide: once triggered, sustain without re-checking window
+        corridor_glide_triggered = (
+            self._last_corridor_plan is not None
+            and self._last_corridor_plan.corridor_valid
+            and self.glide_active
+        )
+        if corridor_glide_triggered or (self.start_requested and self._should_start_glide()):
             if not self.glide_active:
                 phase = self.docking_status.phase.upper() if self.docking_status is not None else "IDLE"
                 if phase in {"DOCKING", "COMPLETED"} and not self.glide_tangent_exit_history_valid:
@@ -829,6 +836,10 @@ class Px4FixedWingBridge(Node):
             self._publish_speed_command_if_needed(selected_speed, mode=speed_mode)
             self._publish_glide_setpoint()
         else:
+            # Corridor plan active: don't publish orbit setpoints while waiting
+            # for offboard readiness — would pull mini back into orbit
+            if self._last_corridor_plan is not None:
+                return
             self._update_terminal_straight_state()
             self._initialize_orbit_hold_if_needed()
             orbit_hold_ready = self._ready_for_orbit_hold()
@@ -1633,8 +1644,9 @@ class Px4FixedWingBridge(Node):
                 "geom_ready": 0.0,
             }
         reason = None
+        # CorridorPlan active — don't clear glide on COMPLETED (causes teleport)
         if phase == "COMPLETED":
-            reason = f"phase={phase}"
+            return  # never clear glide on COMPLETED (causes teleport)
         elif elapsed < self.glide_tangent_exit_min_hold_sec:
             return
         else:
@@ -1669,14 +1681,14 @@ class Px4FixedWingBridge(Node):
                     f"height_error={float(handoff_metrics['height_error']):.3f} "
                     f"progress={float(handoff_metrics['line_progress']):.3f}"
                 )
-            elif phase not in {"APPROACH", "TRACKING", "DOCKING"}:
+            elif phase not in {"APPROACH", "TRACKING", "DOCKING", "COMPLETED"}:
                 reason = f"phase={phase}"
             else:
                 max_hold_sec = max(
                     self.glide_tangent_exit_hold_sec * 3.0,
                     self.glide_tangent_exit_min_hold_sec + 10.0,
                 )
-                if elapsed >= max_hold_sec:
+                if elapsed >= max_hold_sec and self._last_corridor_plan is None:
                     reason = f"safety_timeout elapsed={elapsed:.3f}"
 
         should_clear = reason is not None
@@ -1924,23 +1936,16 @@ class Px4FixedWingBridge(Node):
         phase = self.docking_status.phase.upper()
         if phase in {"DOCKING", "COMPLETED"}:
             return True
-        # ── 走廊式 glide 触发：根据 CorridorPlan 中的轨道相位门限 ──
+        # ── 走廊式 glide 触发：时间 或 距离 ──
         if self._last_corridor_plan is not None and self._last_corridor_plan.corridor_valid:
-            if self.vehicle_local_position is not None and hasattr(self, 'orbit_center') and self.orbit_center is not None:
-                mini_x = self.vehicle_local_position.x  # world frame
-                mini_y = self.vehicle_local_position.y
-                radial_x = mini_x - self.orbit_center[0]
-                radial_y = mini_y - self.orbit_center[1]
-                mini_phase = math.atan2(radial_y, radial_x)
-                trigger_phase = self._last_corridor_plan.mini_orbit_phase_trigger_rad
-                # 将相位差归一化到 [-π, π]
-                phase_diff = (mini_phase - trigger_phase + math.pi) % (2 * math.pi) - math.pi
-                if abs(phase_diff) < 0.15:  # ~8.6° 窗口
-                    self.get_logger().info(
-                        f"corridor glide trigger: mini_phase={math.degrees(mini_phase):.1f}° "
-                        f"trigger={math.degrees(trigger_phase):.1f}° diff={math.degrees(phase_diff):.1f}°"
-                    )
-                    return True
+            now_sec = self.get_clock().now().nanoseconds / 1e9
+            time_ok = now_sec >= self._last_corridor_plan.mini_arrival_time
+            dist_ok = distance < 40.0
+            if time_ok or dist_ok:
+                self.get_logger().info(
+                    f"corridor glide trigger: time={time_ok} dist={dist_ok} d={distance:.1f}m"
+                )
+                return True
         if self.glide_release_mode == "score_state_machine":
             return self._should_start_glide_score_state_machine()
         if phase != self.glide_trigger_phase:

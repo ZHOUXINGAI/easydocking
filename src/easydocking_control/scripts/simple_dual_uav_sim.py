@@ -308,6 +308,8 @@ class SimpleDualUavSim(Node):
             self.mini_yaw = math.atan2(vel[1], vel[0])
 
     def _compute_mini_target_speed(self) -> float:
+        if self._mini_glide_active:
+            return self._mini_glide_speed
         target_speed = self.mini_orbit_speed
         if not self.docking_active or not math.isfinite(self.relative_distance):
             return target_speed

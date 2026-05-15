@@ -54,6 +54,7 @@ public:
   void setInterceptLookahead(double lookahead);
   void setDockingSpeedThreshold(double threshold);
   void setMiniOrbitModel(double radius, double speed, const Eigen::Vector3d & center);
+  void setMiniOrbitStartPhaseDeg(double phase_deg);
   void setCarrierDepartureMinOrbitFraction(double fraction);
   void computeCorridorPlan();
   bool hasNewCorridorPlan() const { return corridor_plan_valid_ && !corridor_plan_published_; }
@@ -216,6 +217,7 @@ private:
   double mini_orbit_radius_;
   double mini_orbit_speed_;
   Eigen::Vector3d mini_orbit_center_;
+  double mini_orbit_start_phase_deg_;
   // Frozen approach direction: locked at departure hold end
   bool approach_direction_locked_;
   Eigen::Vector3d primary_approach_tangent_;
