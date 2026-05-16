@@ -1322,27 +1322,47 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
       mini_velocity_command_.setZero();
       mini_position_setpoint_ = poseToEigen(mini_pose_);
 
-      // Phase 2: formation flight with gap feedback.
-      // Carrier slows down to let mini close the gap.
-      // Complete when gap < 1.5m OR phase2 exceeds 6s (safety timeout).
+      // Phase 2: two-stage terminal docking.
+      // Stage 1 (gap > 10m): step speed for coarse closure.
+      // Stage 2 (gap ≤ 10m): PD controller for fine gap + Z constraint.
+      // Target: signed_gap = -0.5m (carrier 0.5m ahead), mini 0.3m above carrier.
       if (frac >= 0.99) {
         const double phase2_t = elapsed - corridor_traj_duration_;
         const double signed_gap = relative_pos.dot(corridor_tangent_dir_);
         const double abs_gap = std::abs(signed_gap);
-        double speed = 7.5;  // baseline: carrier slower than mini (8.0+)
-        if (signed_gap < -8.0) {
-          speed = 6.5;  // very large gap, strong slowdown
-        } else if (signed_gap < -3.0) {
-          speed = 7.0;  // large gap
-        } else if (signed_gap < -1.0) {
-          speed = 7.3;  // moderate gap
-        } else if (signed_gap > 1.0) {
-          speed = 8.5;  // mini ahead, speed up
+        const double rel_z = relative_pos.z();  // >0 means mini above carrier
+        const double rel_vel_along = relative_vel.dot(corridor_tangent_dir_);
+        double speed;
+        double vz = 0.0;
+
+        if (abs_gap > 10.0) {
+          // Stage 1: step speed for coarse gap closure
+          speed = 7.5;
+          if (signed_gap < -8.0)       speed = 6.5;
+          else if (signed_gap < -3.0)  speed = 7.0;
+          else if (signed_gap < -1.0)  speed = 7.3;
+          else if (signed_gap > 1.0)   speed = 8.5;
+          vz = 0.5 * (rel_z - 0.3);  // gentle Z correction
+        } else {
+          // Stage 2: PD control for fine terminal docking
+          // Along-track: PD on signed gap, target carrier 0.5m ahead
+          const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
+          speed = 8.0 - 0.3 * gap_error - 0.15 * rel_vel_along;
+          speed = clampValue(speed, 7.0, 9.0);
+          // Z: PD to keep mini 0.3m above carrier
+          const double z_error = rel_z - 0.3;
+          vz = 0.6 * z_error - 0.2 * relative_vel.z();
+          vz = clampValue(vz, -1.5, 1.5);
         }
-        carrier_velocity_command_ = corridor_tangent_dir_ * speed;
+
+        carrier_velocity_command_ =
+          corridor_tangent_dir_ * speed + Eigen::Vector3d(0.0, 0.0, vz);
         carrier_position_setpoint_ =
           corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
-        if (phase2_t > 12.0 || (abs_gap < 0.8 && signed_gap < 0)) {
+
+        // Complete: gap < 0.3m, carrier ahead, mini above carrier 0.1-0.6m
+        if (phase2_t > 15.0 ||
+            (abs_gap < 0.3 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.6)) {
           corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
         }
