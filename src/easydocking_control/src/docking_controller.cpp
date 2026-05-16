@@ -1342,17 +1342,19 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           else if (signed_gap < -3.0)  speed = 7.0;
           else if (signed_gap < -1.0)  speed = 7.3;
           else if (signed_gap > 1.0)   speed = 8.5;
-          vz = 0.5 * (rel_z - 0.3);  // gentle Z correction
+          // Gentle Z correction during coarse phase too
+          vz = 0.8 * (rel_z - 0.3) - 0.3 * relative_vel.z();
+          vz = clampValue(vz, -2.0, 2.0);
         } else {
           // Stage 2: PD control for fine terminal docking
           // Along-track: PD on signed gap, target carrier 0.5m ahead
           const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
-          speed = 8.0 - 0.3 * gap_error - 0.15 * rel_vel_along;
+          speed = 8.0 - 0.4 * gap_error - 0.2 * rel_vel_along;
           speed = clampValue(speed, 7.0, 9.0);
-          // Z: PD to keep mini 0.3m above carrier
+          // Z: stronger PD to keep mini 0.3m above carrier
           const double z_error = rel_z - 0.3;
-          vz = 0.6 * z_error - 0.2 * relative_vel.z();
-          vz = clampValue(vz, -1.5, 1.5);
+          vz = 1.2 * z_error - 0.6 * relative_vel.z();
+          vz = clampValue(vz, -2.5, 2.5);
         }
 
         carrier_velocity_command_ =
@@ -1360,9 +1362,9 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         carrier_position_setpoint_ =
           corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
 
-        // Complete: gap < 0.3m, carrier ahead, mini above carrier 0.1-0.6m
+        // Complete: gap < 0.25m, carrier ahead, mini above carrier 0.15-0.55m
         if (phase2_t > 15.0 ||
-            (abs_gap < 0.3 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.6)) {
+            (abs_gap < 0.25 && signed_gap < 0 && rel_z > 0.15 && rel_z < 0.55)) {
           corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
         }
