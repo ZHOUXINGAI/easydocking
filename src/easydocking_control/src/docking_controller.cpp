@@ -1343,18 +1343,18 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           else if (signed_gap < -1.0)  speed = 7.3;
           else if (signed_gap > 1.0)   speed = 8.5;
           // Gentle Z correction during coarse phase too
-          vz = 0.8 * (rel_z - 0.3) - 0.3 * relative_vel.z();
-          vz = clampValue(vz, -2.0, 2.0);
+          vz = 0.5 * (rel_z - 0.3);
+          vz = clampValue(vz, -1.5, 1.5);
         } else {
           // Stage 2: PD control for fine terminal docking
           // Along-track: PD on signed gap, target carrier 0.5m ahead
           const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
-          speed = 8.0 - 0.4 * gap_error - 0.2 * rel_vel_along;
+          speed = 8.0 - 0.3 * gap_error - 0.15 * rel_vel_along;
           speed = clampValue(speed, 7.0, 9.0);
-          // Z: stronger PD to keep mini 0.3m above carrier
+          // Z: PD to keep mini 0.3m above carrier
           const double z_error = rel_z - 0.3;
-          vz = 1.2 * z_error - 0.6 * relative_vel.z();
-          vz = clampValue(vz, -2.5, 2.5);
+          vz = 0.6 * z_error - 0.2 * relative_vel.z();
+          vz = clampValue(vz, -1.5, 1.5);
         }
 
         carrier_velocity_command_ =
