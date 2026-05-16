@@ -1312,10 +1312,13 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
       const double z_end   = corridor_traj_end_.z();
       const Eigen::Vector3d traj_pos(pos_2d.x(), pos_2d.y(),
                                       z_start + frac * (z_end - z_start));
+      // Z correction during arc: pull carrier toward mini's altitude
+      const double z_nominal_vel = (z_end - z_start) / std::max(corridor_traj_duration_, 0.1);
+      const double z_correction = 0.4 * (relative_pos.z() - 0.3);
       const Eigen::Vector3d traj_vel(
         tang_2d.x() * corridor_planned_speed_,
         tang_2d.y() * corridor_planned_speed_,
-        (z_end - z_start) / std::max(corridor_traj_duration_, 0.1));
+        z_nominal_vel + z_correction);
 
       carrier_position_setpoint_ = traj_pos;
       carrier_velocity_command_ = traj_vel;
