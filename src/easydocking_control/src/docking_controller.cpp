@@ -1329,14 +1329,14 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         const double phase2_t = elapsed - corridor_traj_duration_;
         const double signed_gap = relative_pos.dot(corridor_tangent_dir_);
         const double abs_gap = std::abs(signed_gap);
-        double speed = 8.0;
-        if (signed_gap < -3.0) {
-          speed = 7.0;  // large gap, strong slowdown
-        } else if (signed_gap < -1.5) {
+        double speed = 7.5;  // baseline: carrier slower than mini (8.0+)
+        if (signed_gap < -8.0) {
+          speed = 6.5;  // very large gap, strong slowdown
+        } else if (signed_gap < -3.0) {
+          speed = 7.0;  // large gap
+        } else if (signed_gap < -1.0) {
           speed = 7.3;  // moderate gap
-        } else if (signed_gap < -0.5) {
-          speed = 7.6;  // nearly there
-        } else if (signed_gap > 0) {
+        } else if (signed_gap > 1.0) {
           speed = 8.5;  // mini ahead, speed up
         }
         carrier_velocity_command_ = corridor_tangent_dir_ * speed;
