@@ -419,6 +419,8 @@ ros2 launch easydocking_control simulation.launch.py \
   carrier_offset_x:="$CARRIER_OFFSET_X" \
   carrier_offset_y:="$CARRIER_OFFSET_Y" \
   carrier_offset_z:="$CARRIER_OFFSET_Z" \
+  carrier_outside_margin:="$CARRIER_OUTSIDE_MARGIN" \
+  carrier_outside_angle_deg:="$CARRIER_OUTSIDE_ANGLE_DEG" \
   carrier_activate_on_launch:="$CARRIER_ACTIVATE_ON_LAUNCH" \
   carrier_idle_hover_altitude:="$CARRIER_IDLE_HOVER_ALTITUDE" \
   carrier_use_position_setpoint:="$CARRIER_USE_POSITION_SETPOINT" \

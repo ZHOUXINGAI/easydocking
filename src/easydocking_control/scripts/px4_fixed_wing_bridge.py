@@ -2201,8 +2201,13 @@ class Px4FixedWingBridge(Node):
         )
 
         if phase == "COMPLETED":
-            selected_speed = self.capture_speed_command
-            speed_mode = "capture"
+            # CorridorPlan active: sustain glide speed, don't drop to capture
+            if self._last_corridor_plan is not None and self._last_corridor_plan.corridor_valid:
+                selected_speed = self.glide_speed_command
+                speed_mode = "glide"
+            else:
+                selected_speed = self.capture_speed_command
+                speed_mode = "capture"
         elif terminal_straight_guidance_active:
             if phase == "APPROACH":
                 cruise_tracking_speed = min(
