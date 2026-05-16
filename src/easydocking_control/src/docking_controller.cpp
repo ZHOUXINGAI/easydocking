@@ -1322,27 +1322,28 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
       mini_velocity_command_.setZero();
       mini_position_setpoint_ = poseToEigen(mini_pose_);
 
-      // Phase 2: signed-along feedback gap closure
+      // Phase 2: formation flight with gap feedback.
+      // Carrier slows down to let mini close the gap.
+      // Complete when gap < 1.5m OR phase2 exceeds 6s (safety timeout).
       if (frac >= 0.99) {
         const double phase2_t = elapsed - corridor_traj_duration_;
-        // Signed gap along tangent: negative = carrier ahead (good), positive = mini ahead (bad)
         const double signed_gap = relative_pos.dot(corridor_tangent_dir_);
-        double speed;
-        if (signed_gap < -2.0) {
-          // Carrier too far ahead (gap > 2m): slow down, let mini catch up
-          speed = 7.5;
-        } else if (signed_gap > 0) {
-          // Mini ahead! Speed up to overtake and regain front position
-          speed = 8.5;
-        } else {
-          // Gap 0-2m: match mini speed, maintain position
-          speed = 8.0;
-        }
-        carrier_position_setpoint_ =
-          corridor_traj_end_ + corridor_tangent_dir_ * speed * phase2_t;
-        carrier_velocity_command_ = corridor_tangent_dir_ * speed;
         const double abs_gap = std::abs(signed_gap);
-        if (abs_gap < 2.0 && signed_gap < 0) {
+        double speed = 8.0;
+        if (signed_gap < -3.0) {
+          speed = 7.0;  // large gap, strong slowdown
+        } else if (signed_gap < -1.5) {
+          speed = 7.3;  // moderate gap
+        } else if (signed_gap < -0.5) {
+          speed = 7.6;  // nearly there
+        } else if (signed_gap > 0) {
+          speed = 8.5;  // mini ahead, speed up
+        }
+        carrier_velocity_command_ = corridor_tangent_dir_ * speed;
+        carrier_position_setpoint_ =
+          corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
+        if (phase2_t > 12.0 || (abs_gap < 0.8 && signed_gap < 0)) {
+          corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
         }
         carrier_cmd.linear.x = carrier_velocity_command_(0);

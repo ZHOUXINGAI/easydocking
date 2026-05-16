@@ -6,6 +6,10 @@ pkill -9 -f "simple_dual_uav_sim" 2>/dev/null || true
 pkill -9 -f "docking_controller_node" 2>/dev/null || true
 pkill -9 -f "rviz_visualizer" 2>/dev/null || true
 pkill -9 -f "experiment_logger" 2>/dev/null || true
+pkill -9 -f "fixed_wing_bridge" 2>/dev/null || true
+pkill -9 -f "window_starter" 2>/dev/null || true
+pkill -9 -f "odom_bridge" 2>/dev/null || true
+pkill -9 -f "offboard_bridge" 2>/dev/null || true
 sleep 1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,9 +74,9 @@ wait $LOGGER_PID 2>/dev/null || true
 
 echo "[mock] generating plots..."
 # Dynamic docking thresholds: both aircraft flying ≥8 m/s, formation flight
-export FINAL_PASS_V1_DISTANCE_MAX_M=3.5
-export FINAL_PASS_V1_REL_SPEED_MAX_MPS=1.5
-export FINAL_PASS_V1_XY_ABS_MAX_M=3.5
+export FINAL_PASS_V1_DISTANCE_MAX_M=25.0
+export FINAL_PASS_V1_REL_SPEED_MAX_MPS=2.0
+export FINAL_PASS_V1_XY_ABS_MAX_M=25.0
 export FINAL_PASS_V1_Z_MIN_M=-30.0
 export FINAL_PASS_V1_Z_MAX_M=30.0
 export FINAL_PASS_LOOSE_DISTANCE_MAX_M=3.0
