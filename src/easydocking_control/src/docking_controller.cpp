@@ -1338,13 +1338,13 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         double speed;
         double vz = 0.0;
 
-        if (abs_gap > 10.0) {
+        if (abs_gap > 5.0) {
           // Stage 1: step speed for coarse gap closure
           speed = 7.2;
-          if (signed_gap < -15.0)      speed = 6.0;
-          else if (signed_gap < -8.0)  speed = 6.5;
-          else if (signed_gap < -3.0)  speed = 7.0;
-          else if (signed_gap > 1.0)   speed = 8.5;
+          if (abs_gap > 30.0)          speed = 6.0;
+          else if (abs_gap > 15.0)     speed = 6.5;
+          else if (abs_gap > 8.0)      speed = 7.0;
+          if (signed_gap > 1.0)        speed = 8.5;  // mini ahead
           // Gentle Z correction during coarse phase too
           vz = 0.5 * (rel_z - 0.3);
           vz = clampValue(vz, -1.5, 1.5);
@@ -1352,8 +1352,8 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           // Stage 2: PD control for fine terminal docking
           // Along-track: PD on signed gap, target carrier 0.5m ahead
           const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
-          speed = 8.0 - 0.3 * gap_error - 0.15 * rel_vel_along;
-          speed = clampValue(speed, 7.0, 9.0);
+          speed = 8.0 - 0.5 * gap_error - 0.2 * rel_vel_along;
+          speed = clampValue(speed, 6.5, 9.0);
           // Z: PD to keep mini 0.3m above carrier
           const double z_error = rel_z - 0.3;
           vz = 0.6 * z_error - 0.2 * relative_vel.z();
@@ -1366,8 +1366,8 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
 
         // Complete: gap < 0.15m, carrier ahead, mini above carrier 0.1-0.5m
-        // Timeout: 20s gives enough time for PX4 mini glide to close the gap
-        if (phase2_t > 20.0 ||
+        // Timeout: 25s for PX4 glide closure (6.0-7.2 m/s vs mini 8+ m/s)
+        if (phase2_t > 25.0 ||
             (abs_gap < 0.15 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.5)) {
           corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
