@@ -1366,7 +1366,8 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
 
         // Complete: gap < 0.15m, carrier ahead, mini above carrier 0.1-0.5m
-        if (phase2_t > 30.0 ||
+        // Timeout: 20s gives enough time for PX4 mini glide to close the gap
+        if (phase2_t > 20.0 ||
             (abs_gap < 0.15 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.5)) {
           corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
