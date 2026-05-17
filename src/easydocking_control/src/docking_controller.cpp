@@ -1340,10 +1340,10 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
 
         if (abs_gap > 10.0) {
           // Stage 1: step speed for coarse gap closure
-          speed = 7.5;
-          if (signed_gap < -8.0)       speed = 6.5;
+          speed = 7.2;
+          if (signed_gap < -15.0)      speed = 6.0;
+          else if (signed_gap < -8.0)  speed = 6.5;
           else if (signed_gap < -3.0)  speed = 7.0;
-          else if (signed_gap < -1.0)  speed = 7.3;
           else if (signed_gap > 1.0)   speed = 8.5;
           // Gentle Z correction during coarse phase too
           vz = 0.5 * (rel_z - 0.3);
@@ -1365,9 +1365,9 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
         carrier_position_setpoint_ =
           corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
 
-        // Complete: gap < 0.25m, carrier ahead, mini above carrier 0.15-0.55m
-        if (phase2_t > 15.0 ||
-            (abs_gap < 0.25 && signed_gap < 0 && rel_z > 0.15 && rel_z < 0.55)) {
+        // Complete: gap < 0.15m, carrier ahead, mini above carrier 0.1-0.5m
+        if (phase2_t > 30.0 ||
+            (abs_gap < 0.15 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.5)) {
           corridor_plan_valid_ = false;
           current_phase_ = DockingPhase::COMPLETED;
         }
