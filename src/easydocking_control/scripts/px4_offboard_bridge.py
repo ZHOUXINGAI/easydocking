@@ -334,14 +334,24 @@ class Px4OffboardBridge(Node):
         self.trajectory_pub.publish(trajectory)
         self.offboard_counter += 1
 
-        if self.offboard_counter >= 20 and not self.mode_sent:
-            self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
-            self.mode_sent = True
-            self.get_logger().info(f"{self.uav_name}: requested OFFBOARD mode")
-        if self.mode_sent and self.arm_on_start and not self.arm_sent:
-            self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
-            self.arm_sent = True
-            self.get_logger().info(f"{self.uav_name}: requested ARM")
+        # Request OFFBOARD mode after initial settling, retry every 2.5s
+        if self.offboard_counter >= 20:
+            if not self.mode_sent or self.offboard_counter % 50 == 0:
+                self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
+                if not self.mode_sent:
+                    self.mode_sent = True
+                    self.get_logger().info(f"{self.uav_name}: requested OFFBOARD mode")
+                else:
+                    self.get_logger().info(f"{self.uav_name}: retrying OFFBOARD mode request")
+        # Request ARM after OFFBOARD, retry every 2.5s
+        if self.mode_sent and self.arm_on_start:
+            if not self.arm_sent or self.offboard_counter % 50 == 0:
+                self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
+                if not self.arm_sent:
+                    self.arm_sent = True
+                    self.get_logger().info(f"{self.uav_name}: requested ARM")
+                else:
+                    self.get_logger().info(f"{self.uav_name}: retrying ARM request")
 
     def _publish_vehicle_command(self, command: int, param1: float = 0.0, param2: float = 0.0) -> None:
         msg = VehicleCommand()
