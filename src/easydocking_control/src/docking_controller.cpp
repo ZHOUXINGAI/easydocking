@@ -1200,7 +1200,7 @@ void DockingController::computeCorridorPlan()
 	const double arc_len = r_arc * std::abs(dphi);
 
 	// Target Z: idle hover altitude (30m), must match mini orbit altitude
-	const double target_z = idle_hover_altitude_;
+	const double target_z = mini_pos.z();
 	corridor_traj_start_ = Eigen::Vector3d(C.x(), C.y(), carrier_pos.z());
 	corridor_traj_end_   = Eigen::Vector3d(T.x(), T.y(), target_z);
 	corridor_traj_start_time_ = 0.0;
