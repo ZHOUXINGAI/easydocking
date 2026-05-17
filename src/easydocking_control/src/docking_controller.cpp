@@ -1352,8 +1352,8 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           // Stage 2: PD control for fine terminal docking
           // Along-track: PD on signed gap, target carrier 0.5m ahead
           const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
-          speed = 8.0 - 0.5 * gap_error - 0.2 * rel_vel_along;
-          speed = clampValue(speed, 6.5, 9.0);
+          speed = 8.0 + 0.5 * gap_error + 0.2 * rel_vel_along;
+          speed = clampValue(speed, 6.0, 9.0);
           // Z: PD to keep mini 0.3m above carrier
           const double z_error = rel_z - 0.3;
           vz = 0.6 * z_error - 0.2 * relative_vel.z();
