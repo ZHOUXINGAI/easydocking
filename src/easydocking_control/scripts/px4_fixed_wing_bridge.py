@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
+import faulthandler
 import math
+import time
 from typing import Optional
 
 import rclpy
 from easydocking_msgs.msg import CorridorPlan, DockingCommand, DockingStatus
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos_event import SubscriptionEventCallbacks
 from std_msgs.msg import Float64MultiArray
 
 try:
@@ -22,6 +26,7 @@ try:
         VehicleCommand,
         VehicleCommandAck,
         VehicleGlobalPosition,
+        VehicleLandDetected,
         VehicleLocalPosition,
         VehicleStatus,
     )
@@ -35,8 +40,33 @@ except ImportError:  # pragma: no cover
     VehicleCommand = None
     VehicleCommandAck = None
     VehicleGlobalPosition = None
+    VehicleLandDetected = None
     VehicleLocalPosition = None
     VehicleStatus = None
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 GLIDE_SCORE_FEATURE_ORDER = (
@@ -181,8 +211,11 @@ class Px4FixedWingBridge(Node):
         self.declare_parameter("energy_guard_hold_sec", 1.5)
         self.declare_parameter("use_offboard_orbit_hold", True)
         self.declare_parameter("max_orbit_entry_phase_correction_deg", 45.0)
-        self.declare_parameter("orbit_hold_ready_altitude", 1.5)
-        self.declare_parameter("orbit_hold_enable_delay_sec", 3.0)
+        self.declare_parameter("takeoff_climbout_distance", 180.0)
+        self.declare_parameter("orbit_hold_ready_altitude", 24.0)
+        self.declare_parameter("orbit_hold_enable_delay_sec", 2.0)
+        self.declare_parameter("orbit_hold_min_xy_speed", 9.0)
+        self.declare_parameter("orbit_hold_min_true_airspeed", 9.0)
         self.declare_parameter("orbit_radial_gain", 0.35)
         self.declare_parameter("orbit_radial_speed_limit", 2.0)
         self.declare_parameter("orbit_phase_lead_deg", 18.0)
@@ -201,6 +234,7 @@ class Px4FixedWingBridge(Node):
             VehicleCommand,
             VehicleCommandAck,
             VehicleGlobalPosition,
+            VehicleLandDetected,
             VehicleLocalPosition,
             VehicleStatus,
         ]):
@@ -434,8 +468,11 @@ class Px4FixedWingBridge(Node):
         self.max_orbit_entry_phase_correction = math.radians(
             float(self.get_parameter("max_orbit_entry_phase_correction_deg").value)
         )
+        self.takeoff_climbout_distance = float(self.get_parameter("takeoff_climbout_distance").value)
         self.orbit_hold_ready_altitude = float(self.get_parameter("orbit_hold_ready_altitude").value)
         self.orbit_hold_enable_delay_sec = float(self.get_parameter("orbit_hold_enable_delay_sec").value)
+        self.orbit_hold_min_xy_speed = float(self.get_parameter("orbit_hold_min_xy_speed").value)
+        self.orbit_hold_min_true_airspeed = float(self.get_parameter("orbit_hold_min_true_airspeed").value)
         self.orbit_radial_gain = float(self.get_parameter("orbit_radial_gain").value)
         self.orbit_radial_speed_limit = float(self.get_parameter("orbit_radial_speed_limit").value)
         self.orbit_phase_lead = math.radians(float(self.get_parameter("orbit_phase_lead_deg").value))
@@ -512,14 +549,17 @@ class Px4FixedWingBridge(Node):
         self.last_logged_arming_state = None
         self.last_ack_signature = None
         self.last_docking_phase = "IDLE"
+        self.airborne_disarmed_rearm_logged = False
         self.approach_axis_world = [1.0, 0.0]
 
         self.vehicle_status: Optional[VehicleStatus] = None
         self.vehicle_global_position: Optional[VehicleGlobalPosition] = None
+        self.vehicle_land_detected: Optional[VehicleLandDetected] = None
         self.vehicle_local_position: Optional[VehicleLocalPosition] = None
         self.vehicle_setpoint_triplet: Optional[PositionSetpointTriplet] = None
         self.airspeed_validated: Optional[AirspeedValidated] = None
         self.tecs_status: Optional[TecsStatus] = None
+        self.last_logged_land_state = None
         self.carrier_odom: Optional[Odometry] = None
         self.docking_status: Optional[DockingStatus] = None
         self.energy_guard_recover_until_sec = 0.0
@@ -534,44 +574,61 @@ class Px4FixedWingBridge(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
+        no_qos_events = SubscriptionEventCallbacks(use_default_callbacks=False)
 
-        self.create_subscription(DockingCommand, "/docking/command", self._direct_command_cb, 10)
-        self.create_subscription(DockingCommand, "/docking/command_latched", self._latched_command_cb, latched_qos)
-        self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
-        self.create_subscription(CorridorPlan, "/docking/corridor_plan", self._corridor_cb, 10)
-        self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10)
+        self.create_subscription(DockingCommand, "/docking/command", self._direct_command_cb, 10, event_callbacks=no_qos_events)
+        self.create_subscription(DockingCommand, "/docking/command_latched", self._latched_command_cb, latched_qos, event_callbacks=no_qos_events)
+        self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10, event_callbacks=no_qos_events)
+        self.create_subscription(CorridorPlan, "/docking/corridor_plan", self._corridor_cb, latched_qos, event_callbacks=no_qos_events)
+        self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10, event_callbacks=no_qos_events)
         self.create_subscription(
-            VehicleStatus, f"{self.px4_namespace}/fmu/out/vehicle_status_v2", self._vehicle_status_cb, px4_qos
+            VehicleStatus,
+            f"{self.px4_namespace}/fmu/out/vehicle_status_v2",
+            self._vehicle_status_cb,
+            px4_qos,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             VehicleCommandAck,
             f"{self.px4_namespace}/fmu/out/vehicle_command_ack_v1",
             self._vehicle_command_ack_cb,
             px4_qos,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             VehicleGlobalPosition,
             f"{self.px4_namespace}/fmu/out/vehicle_global_position",
             self._global_pos_cb,
             px4_qos,
+            event_callbacks=no_qos_events,
+        )
+        self.create_subscription(
+            VehicleLandDetected,
+            f"{self.px4_namespace}/fmu/out/vehicle_land_detected",
+            self._land_detected_cb,
+            px4_qos,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             VehicleLocalPosition,
             f"{self.px4_namespace}/fmu/out/vehicle_local_position_v1",
             self._local_pos_cb,
             px4_qos,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             PositionSetpointTriplet,
             f"{self.px4_namespace}/fmu/out/position_setpoint_triplet",
             self._position_setpoint_triplet_cb,
             px4_qos,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             AirspeedValidated,
             f"{self.px4_namespace}/fmu/out/airspeed_validated_v1",
             self._airspeed_cb,
             px4_qos,
+            event_callbacks=no_qos_events,
         )
         if TecsStatus is not None:
             self.create_subscription(
@@ -579,12 +636,14 @@ class Px4FixedWingBridge(Node):
                 f"{self.px4_namespace}/fmu/out/tecs_status",
                 self._tecs_status_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 TecsStatus,
                 f"{self.px4_namespace}/fmu/out/tecs_status_v1",
                 self._tecs_status_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
 
         self.offboard_mode_pub = self.create_publisher(
@@ -732,7 +791,9 @@ class Px4FixedWingBridge(Node):
             self.get_logger().info(
                 "fixed-wing: vehicle status "
                 f"nav={self._nav_state_name(nav_state)} "
-                f"arming={self._arming_state_name(arming_state)}"
+                f"arming={self._arming_state_name(arming_state)} "
+                f"arm_reason={self._arm_disarm_reason_name(int(msg.latest_arming_reason))} "
+                f"disarm_reason={self._arm_disarm_reason_name(int(msg.latest_disarming_reason))}"
             )
 
     def _vehicle_command_ack_cb(self, msg: VehicleCommandAck) -> None:
@@ -751,6 +812,25 @@ class Px4FixedWingBridge(Node):
     def _global_pos_cb(self, msg: VehicleGlobalPosition) -> None:
         self.vehicle_global_position = msg
 
+    def _land_detected_cb(self, msg: VehicleLandDetected) -> None:
+        self.vehicle_land_detected = msg
+        state = (
+            bool(msg.landed),
+            bool(msg.maybe_landed),
+            bool(msg.ground_contact),
+            bool(msg.horizontal_movement),
+            bool(msg.vertical_movement),
+        )
+        if state != self.last_logged_land_state:
+            self.last_logged_land_state = state
+            self.get_logger().info(
+                "fixed-wing: land detector "
+                f"landed={int(msg.landed)} maybe={int(msg.maybe_landed)} "
+                f"ground={int(msg.ground_contact)} "
+                f"hmove={int(msg.horizontal_movement)} vmove={int(msg.vertical_movement)} "
+                f"low_thr={int(msg.has_low_throttle)}"
+            )
+
     def _local_pos_cb(self, msg: VehicleLocalPosition) -> None:
         self.vehicle_local_position = msg
 
@@ -768,13 +848,18 @@ class Px4FixedWingBridge(Node):
             return
         if self.vehicle_global_position is None or self.vehicle_local_position is None or self.vehicle_status is None:
             return
-        if not self.takeoff_sent:
+        is_armed = int(self.vehicle_status.arming_state) == int(VehicleStatus.ARMING_STATE_ARMED)
+        if is_armed:
+            self.airborne_disarmed_rearm_logged = False
+        if not self.takeoff_sent and is_armed:
+            self.takeoff_sent = True
+        elif not self.takeoff_sent:
             self._send_arm()
             self._send_takeoff()
             self.takeoff_sent = True
             return
 
-        if int(self.vehicle_status.arming_state) != int(VehicleStatus.ARMING_STATE_ARMED):
+        if not is_armed:
             now_sec = self.get_clock().now().nanoseconds * 1e-9
             should_retry = (
                 self.last_arm_command_time_sec is None or
@@ -782,7 +867,34 @@ class Px4FixedWingBridge(Node):
             )
             if should_retry:
                 self._send_arm()
-                self._send_takeoff()
+                current_climb_alt = self._current_climb_altitude()
+                xy_speed = math.hypot(
+                    float(self.vehicle_local_position.vx),
+                    float(self.vehicle_local_position.vy),
+                )
+                airborne_or_moving = (
+                    self.takeoff_sent and
+                    (
+                        (
+                            current_climb_alt is not None and
+                            current_climb_alt >= max(4.0, self.takeoff_altitude * 0.25)
+                        ) or
+                        xy_speed >= 4.0
+                    )
+                )
+                if airborne_or_moving:
+                    if not self.airborne_disarmed_rearm_logged:
+                        self.airborne_disarmed_rearm_logged = True
+                        climb_text = (
+                            "n/a" if current_climb_alt is None else f"{current_climb_alt:.1f}"
+                        )
+                        self.get_logger().warn(
+                            "fixed-wing: transient disarmed while airborne; "
+                            f"re-arming without re-sending TAKEOFF alt={climb_text} "
+                            f"xy_speed={xy_speed:.1f}"
+                        )
+                else:
+                    self._send_takeoff()
             if (
                 self.first_arm_attempt_time_sec is not None and
                 (now_sec - self.first_arm_attempt_time_sec) >= self.arm_retry_timeout_sec
@@ -797,7 +909,6 @@ class Px4FixedWingBridge(Node):
                         f"after {self.arm_retry_timeout_sec:.1f}s"
                     )
             return
-
         # CorridorPlan glide: once triggered, sustain without re-checking window
         corridor_glide_triggered = (
             self._last_corridor_plan is not None
@@ -810,7 +921,8 @@ class Px4FixedWingBridge(Node):
                 if phase in {"DOCKING", "COMPLETED"} and not self.glide_tangent_exit_history_valid:
                     self._arm_glide_tangent_exit()
                     self._log_docking_tangent_release_if_needed()
-                self._seed_approach_axis_from_current_flight_path()
+                if not self.glide_tangent_exit_active:
+                    self._seed_approach_axis_from_current_flight_path()
             self.glide_active = True
 
         if self.glide_active and self._ready_for_offboard():
@@ -836,9 +948,10 @@ class Px4FixedWingBridge(Node):
             self._publish_speed_command_if_needed(selected_speed, mode=speed_mode)
             self._publish_glide_setpoint()
         else:
-            # Corridor plan active: don't publish orbit setpoints while waiting
-            # for offboard readiness — would pull mini back into orbit
-            if self._last_corridor_plan is not None:
+            # CorridorPlan already released to glide, but offboard is not ready yet:
+            # don't pull the fixed-wing back into orbit. Before glide is triggered,
+            # keep loiter alive until the planned phase gate is reached.
+            if self._last_corridor_plan is not None and self.glide_active:
                 return
             self._update_terminal_straight_state()
             self._initialize_orbit_hold_if_needed()
@@ -846,8 +959,7 @@ class Px4FixedWingBridge(Node):
             wait_loiter_enabled = self.wait_loiter_active or orbit_hold_ready
             if wait_loiter_enabled and self.use_offboard_orbit_hold:
                 if not self.wait_loiter_active and self.vehicle_local_position is not None:
-                    current_world_z = self.world_offset[2] - float(self.vehicle_local_position.z)
-                    self.wait_orbit_altitude = max(self.takeoff_altitude, current_world_z)
+                    self.wait_orbit_altitude = self.takeoff_altitude
                 self.wait_loiter_active = True
                 self.orbit_hold_committed = True
                 self.offboard_active = True
@@ -856,8 +968,7 @@ class Px4FixedWingBridge(Node):
                 self._publish_status_debug_if_needed("wait_orbit_offboard")
             elif wait_loiter_enabled:
                 if not self.wait_loiter_active and self.vehicle_local_position is not None:
-                    current_world_z = self.world_offset[2] - float(self.vehicle_local_position.z)
-                    self.wait_orbit_altitude = max(self.takeoff_altitude, current_world_z)
+                    self.wait_orbit_altitude = self.takeoff_altitude
                 self.wait_loiter_active = True
                 self.orbit_hold_committed = False
                 self.offboard_active = False
@@ -1133,10 +1244,7 @@ class Px4FixedWingBridge(Node):
         current_climb_alt = self._current_climb_altitude()
         if current_climb_alt is None:
             return
-        init_altitude = min(
-            max(self.orbit_hold_ready_altitude - 1.0, self.takeoff_altitude * 0.88, 6.0),
-            max(self.takeoff_altitude - 0.6, 6.0),
-        )
+        init_altitude = self._orbit_hold_handoff_altitude()
         if current_climb_alt < init_altitude:
             return
 
@@ -1151,6 +1259,20 @@ class Px4FixedWingBridge(Node):
             current_world_x - self.orbit_center[0],
         )
         phase_error = self._wrap_angle(self.orbit_start_phase - current_phase)
+        if self.use_offboard_orbit_hold:
+            self.orbit_phase = current_phase
+            self.last_orbit_update_time = self.get_clock().now().nanoseconds * 1e-9
+            self.orbit_hold_initialized = True
+            self.loiter_command_sent = False
+            self.last_loiter_command_time = None
+            self.get_logger().info(
+                "fixed-wing: orbit hold initialized "
+                f"mode=offboard_continuous "
+                f"current_phase_deg={math.degrees(current_phase):.1f} "
+                f"climb_alt={current_climb_alt:.1f} "
+                f"radius_error={configured_distance - self.orbit_radius:.1f}"
+            )
+            return
         if (
             self.allow_orbit_recentering and
             (
@@ -1430,10 +1552,42 @@ class Px4FixedWingBridge(Node):
         self.last_arm_command_time_sec = now_sec
         self._publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
 
+    def _takeoff_climbout_target_world(self) -> list[float]:
+        assert self.vehicle_local_position is not None
+        current_world_x = self.world_offset[0] + float(self.vehicle_local_position.x)
+        current_world_y = self.world_offset[1] + float(self.vehicle_local_position.y)
+        velocity_norm = math.hypot(
+            float(self.vehicle_local_position.vx),
+            float(self.vehicle_local_position.vy),
+        )
+        if velocity_norm > 3.0:
+            axis_x = float(self.vehicle_local_position.vx) / velocity_norm
+            axis_y = float(self.vehicle_local_position.vy) / velocity_norm
+        else:
+            to_orbit_x = self.orbit_center[0] - current_world_x
+            to_orbit_y = self.orbit_center[1] - current_world_y
+            to_orbit_norm = math.hypot(to_orbit_x, to_orbit_y)
+            if to_orbit_norm >= 25.0:
+                axis_x = to_orbit_x / to_orbit_norm
+                axis_y = to_orbit_y / to_orbit_norm
+            else:
+                axis_x, axis_y = 1.0, 0.0
+        climbout_distance = max(
+            120.0,
+            self.takeoff_climbout_distance,
+            2.0 * self.orbit_radius,
+        )
+        return [
+            current_world_x + axis_x * climbout_distance,
+            current_world_y + axis_y * climbout_distance,
+            self.takeoff_altitude,
+        ]
+
     def _send_takeoff(self) -> None:
         assert self.vehicle_global_position is not None
+        assert self.vehicle_local_position is not None
         self.takeoff_reference_alt_m = float(self.vehicle_global_position.alt)
-        takeoff_target_world = [self.orbit_center[0], self.orbit_center[1], self.takeoff_altitude]
+        takeoff_target_world = self._takeoff_climbout_target_world()
         target_lat, target_lon, target_alt = self._world_point_to_global(takeoff_target_world)
         self.takeoff_target_alt_m = float(target_alt)
         self._publish_vehicle_command(
@@ -1443,7 +1597,10 @@ class Px4FixedWingBridge(Node):
             param7=float(target_alt),
         )
         self.takeoff_sent_time_sec = self.get_clock().now().nanoseconds * 1e-9
-        self.get_logger().info("fixed-wing: takeoff command sent")
+        self.get_logger().info(
+            "fixed-wing: takeoff command sent "
+            f"climbout=({takeoff_target_world[0]:.1f},{takeoff_target_world[1]:.1f},{takeoff_target_world[2]:.1f})"
+        )
 
     def _ready_for_offboard(self) -> bool:
         current_climb_alt = self._current_climb_altitude()
@@ -1451,19 +1608,46 @@ class Px4FixedWingBridge(Node):
             return False
         return current_climb_alt >= max(4.0, self.takeoff_altitude * 0.6)
 
+    def _orbit_hold_handoff_altitude(self) -> float:
+        return max(
+            6.0,
+            min(
+                self.orbit_hold_ready_altitude,
+                max(6.0, self.takeoff_altitude - 2.0),
+            ),
+        )
+
     def _ready_for_orbit_hold(self) -> bool:
         if self.takeoff_sent_time_sec is None:
             return False
         now_sec = self.get_clock().now().nanoseconds * 1e-9
-        delay_elapsed = (now_sec - self.takeoff_sent_time_sec) >= self.orbit_hold_enable_delay_sec
+        if now_sec - self.takeoff_sent_time_sec < self.orbit_hold_enable_delay_sec:
+            return False
         current_climb_alt = self._current_climb_altitude()
         if current_climb_alt is None:
             return False
-        enter_altitude = max(self.orbit_hold_ready_altitude, self.takeoff_altitude * 0.65)
-        exit_altitude = max(enter_altitude - 0.8, enter_altitude * 0.88)
-        if not delay_elapsed:
+        if (
+            self.vehicle_land_detected is not None and
+            (self.vehicle_land_detected.landed or self.vehicle_land_detected.maybe_landed)
+        ):
             self.orbit_hold_ready_active = False
             return False
+        if self.vehicle_local_position is None:
+            return False
+        xy_speed = math.hypot(
+            float(self.vehicle_local_position.vx),
+            float(self.vehicle_local_position.vy),
+        )
+        if xy_speed < self.orbit_hold_min_xy_speed:
+            self.orbit_hold_ready_active = False
+            return False
+        if self.airspeed_validated is not None:
+            true_airspeed = float(self.airspeed_validated.true_airspeed_m_s)
+            if math.isfinite(true_airspeed) and true_airspeed < self.orbit_hold_min_true_airspeed:
+                self.orbit_hold_ready_active = False
+                return False
+        enter_altitude = self._orbit_hold_handoff_altitude()
+        exit_altitude = max(enter_altitude - 1.0, enter_altitude * 0.92)
         if self.orbit_hold_ready_active:
             self.orbit_hold_ready_active = current_climb_alt >= exit_altitude
         else:
@@ -1586,6 +1770,45 @@ class Px4FixedWingBridge(Node):
             f"axis=({axis_x:.3f},{axis_y:.3f})"
         )
 
+    def _arm_corridor_tangent_exit(self) -> None:
+        if (
+            not self.glide_tangent_exit_enable or
+            self.vehicle_local_position is None or
+            self._last_corridor_plan is None or
+            not self._last_corridor_plan.corridor_valid
+        ):
+            return
+
+        cp = self._last_corridor_plan
+        axis_norm = math.hypot(cp.tangent_dir_x, cp.tangent_dir_y)
+        if axis_norm <= 1e-6:
+            return
+
+        axis_x = cp.tangent_dir_x / axis_norm
+        axis_y = cp.tangent_dir_y / axis_norm
+        current_world_z = self.world_offset[2] - float(self.vehicle_local_position.z)
+        planned_glide_z = (
+            float(cp.rendezvous_z) +
+            self.final_relative_position[2] +
+            self.terminal_sync_max_height_offset
+        )
+        target_glide_z = max(planned_glide_z, current_world_z)
+        now_sec = self.get_clock().now().nanoseconds * 1e-9
+
+        self.glide_tangent_exit_active = True
+        self.glide_tangent_exit_start_time_sec = now_sec
+        self.glide_tangent_exit_axis_world = [axis_x, axis_y]
+        self.glide_tangent_exit_anchor_world = [float(cp.rendezvous_x), float(cp.rendezvous_y)]
+        self.glide_tangent_exit_altitude = target_glide_z
+        self.glide_tangent_exit_history_valid = True
+        self.approach_axis_world = [axis_x, axis_y]
+        self.get_logger().info(
+            "fixed-wing: corridor tangent exit armed "
+            f"anchor=({cp.rendezvous_x:.3f},{cp.rendezvous_y:.3f},{self.glide_tangent_exit_altitude:.3f}) "
+            f"current_z={current_world_z:.3f} "
+            f"axis=({axis_x:.3f},{axis_y:.3f})"
+        )
+
     def _update_glide_tangent_exit_state(self) -> None:
         if not self.glide_tangent_exit_active:
             self.handoff_debug = self._empty_handoff_debug()
@@ -1600,6 +1823,10 @@ class Px4FixedWingBridge(Node):
         phase = self.docking_status.phase.upper() if self.docking_status is not None else "IDLE"
         elapsed = now_sec - self.glide_tangent_exit_start_time_sec
         handoff_metrics = self._compute_terminal_sync_metrics()
+        corridor_plan_active = (
+            self._last_corridor_plan is not None and
+            self._last_corridor_plan.corridor_valid
+        )
         sync_gate_distance = max(
             self.terminal_slowdown_start_distance + 3.2,
             self.capture_distance + 5.5,
@@ -1644,10 +1871,15 @@ class Px4FixedWingBridge(Node):
                 "geom_ready": 0.0,
             }
         reason = None
-        # CorridorPlan active — don't clear glide on COMPLETED (causes teleport)
         if phase == "COMPLETED":
-            return  # never clear glide on COMPLETED (causes teleport)
+            return
         elif elapsed < self.glide_tangent_exit_min_hold_sec:
+            return
+        elif (
+            corridor_plan_active and
+            not self.terminal_straight_active and
+            phase in {"APPROACH", "TRACKING", "DOCKING"}
+        ):
             return
         else:
             handoff_ready = (
@@ -1936,14 +2168,39 @@ class Px4FixedWingBridge(Node):
         phase = self.docking_status.phase.upper()
         if phase in {"DOCKING", "COMPLETED"}:
             return True
-        # ── 走廊式 glide 触发：时间 或 距离 ──
+        # ── 走廊式 glide 触发：时间 或 轨道相位 ──
         if self._last_corridor_plan is not None and self._last_corridor_plan.corridor_valid:
             now_sec = self.get_clock().now().nanoseconds / 1e9
             time_ok = now_sec >= self._last_corridor_plan.mini_arrival_time
-            dist_ok = distance < 40.0
-            if time_ok or dist_ok:
+            phase_ok = False
+            phase_error_deg = math.nan
+            if self.vehicle_local_position is not None:
+                current_world_x = self.world_offset[0] + float(self.vehicle_local_position.x)
+                current_world_y = self.world_offset[1] + float(self.vehicle_local_position.y)
+                current_radius = math.hypot(
+                    current_world_x - self.orbit_center[0],
+                    current_world_y - self.orbit_center[1],
+                )
+                current_phase = math.atan2(
+                    current_world_y - self.orbit_center[1],
+                    current_world_x - self.orbit_center[0],
+                )
+                phase_error = self._wrap_angle(
+                    self._last_corridor_plan.mini_orbit_phase_trigger_rad - current_phase
+                )
+                phase_error_deg = math.degrees(phase_error)
+                radial_error = abs(current_radius - self.orbit_radius)
+                radial_ok = radial_error <= max(8.0, 0.12 * self.orbit_radius)
+                phase_ok = radial_ok and abs(phase_error) <= math.radians(3.0)
+                if time_ok and radial_ok and abs(phase_error) <= math.radians(8.0):
+                    phase_ok = True
+            distance_ok = distance <= 45.0
+            if phase_ok and distance_ok:
+                if not self.glide_tangent_exit_active:
+                    self._arm_corridor_tangent_exit()
                 self.get_logger().info(
-                    f"corridor glide trigger: time={time_ok} dist={dist_ok} d={distance:.1f}m"
+                    f"corridor glide trigger: time={time_ok} phase={phase_ok} "
+                    f"dist_ok={distance_ok} d={distance:.1f} phase_err_deg={phase_error_deg:.1f}"
                 )
                 return True
         if self.glide_release_mode == "score_state_machine":
@@ -1990,9 +2247,20 @@ class Px4FixedWingBridge(Node):
             ),
         )
 
+        handoff_span = max(1.0, self.takeoff_altitude - self._orbit_hold_handoff_altitude())
+        climb_altitude = self._current_climb_altitude()
+        if climb_altitude is None:
+            position_alpha = 0.0
+        else:
+            position_alpha = max(
+                0.0,
+                min(1.0, (climb_altitude - self._orbit_hold_handoff_altitude()) / handoff_span),
+            )
+        orbit_target_x = self.orbit_center[0] + self.orbit_radius * target_radial_unit[0]
+        orbit_target_y = self.orbit_center[1] + self.orbit_radius * target_radial_unit[1]
         desired_position_world = [
-            self.orbit_center[0] + self.orbit_radius * target_radial_unit[0],
-            self.orbit_center[1] + self.orbit_radius * target_radial_unit[1],
+            current_world_x + (orbit_target_x - current_world_x) * position_alpha,
+            current_world_y + (orbit_target_y - current_world_y) * position_alpha,
             self.wait_orbit_altitude,
         ]
         desired_velocity_world = [
@@ -2086,6 +2354,11 @@ class Px4FixedWingBridge(Node):
     def _publish_loiter_command_if_needed(self) -> None:
         if self.vehicle_global_position is None or self.vehicle_local_position is None:
             return
+        if (
+            self.vehicle_land_detected is not None and
+            (self.vehicle_land_detected.landed or self.vehicle_land_detected.maybe_landed)
+        ):
+            return
 
         now_sec = self.get_clock().now().nanoseconds * 1e-9
         current_climb_alt = self._current_climb_altitude()
@@ -2094,7 +2367,7 @@ class Px4FixedWingBridge(Node):
 
         if not self.orbit_hold_initialized:
             return
-        min_loiter_altitude = max(self.takeoff_altitude - 1.2, self.takeoff_altitude * 0.93)
+        min_loiter_altitude = self._orbit_hold_handoff_altitude()
 
         if current_climb_alt < min_loiter_altitude:
             return
@@ -2177,6 +2450,12 @@ class Px4FixedWingBridge(Node):
             self.terminal_straight_active and
             phase in {"APPROACH", "TRACKING", "DOCKING"}
         )
+        corridor_tangent_guidance_active = (
+            self._last_corridor_plan is not None and
+            self._last_corridor_plan.corridor_valid and
+            self.glide_tangent_exit_active and
+            phase in {"APPROACH", "TRACKING", "DOCKING"}
+        )
         terminal_straight_elapsed = 0.0
         if terminal_straight_guidance_active and self.glide_tangent_exit_start_time_sec is not None:
             terminal_straight_elapsed = max(
@@ -2203,11 +2482,26 @@ class Px4FixedWingBridge(Node):
         if phase == "COMPLETED":
             # CorridorPlan active: sustain glide speed, don't drop to capture
             if self._last_corridor_plan is not None and self._last_corridor_plan.corridor_valid:
-                selected_speed = self.glide_speed_command
-                speed_mode = "glide"
+                selected_speed = self._completed_corridor_speed_command(
+                    terminal_distance,
+                    self._completed_corridor_signed_gap(),
+                )
+                speed_mode = "completed_corridor"
             else:
                 selected_speed = self.capture_speed_command
                 speed_mode = "capture"
+        elif corridor_tangent_guidance_active:
+            tangent_elapsed = 0.0
+            if self.glide_tangent_exit_start_time_sec is not None:
+                tangent_elapsed = max(
+                    0.0,
+                    self.get_clock().now().nanoseconds * 1e-9 - self.glide_tangent_exit_start_time_sec,
+                )
+            tangent_alpha = max(0.0, min(1.0, tangent_elapsed / 5.0))
+            selected_speed = self.tracking_speed_command + tangent_alpha * (
+                self.docking_speed_command - self.tracking_speed_command
+            )
+            speed_mode = "corridor_tangent"
         elif terminal_straight_guidance_active:
             if phase == "APPROACH":
                 cruise_tracking_speed = min(
@@ -2356,6 +2650,51 @@ class Px4FixedWingBridge(Node):
 
         return selected_speed, speed_mode
 
+    def _completed_corridor_speed_command(
+        self,
+        terminal_distance: float = math.inf,
+        signed_gap: float | None = None,
+    ) -> float:
+        high_speed = float(self.glide_speed_command)
+        low_speed = min(high_speed, max(8.45, high_speed - 0.05))
+
+        def smoothstep(low_edge: float, high_edge: float, value: float) -> float:
+            if not math.isfinite(value):
+                return 0.0
+            if high_edge <= low_edge:
+                return 1.0 if value >= high_edge else 0.0
+            t = max(0.0, min(1.0, (value - low_edge) / (high_edge - low_edge)))
+            return t * t * (3.0 - 2.0 * t)
+
+        distance_alpha = smoothstep(0.32, 0.70, terminal_distance)
+        gap_alpha = 0.0
+        if signed_gap is not None:
+            gap_alpha = smoothstep(0.30, 0.70, -signed_gap)
+        alpha = max(distance_alpha, gap_alpha)
+        return low_speed + alpha * (high_speed - low_speed)
+
+    def _completed_corridor_signed_gap(self) -> float | None:
+        if (
+            self.carrier_odom is None or
+            self.vehicle_local_position is None or
+            self._last_corridor_plan is None or
+            not self._last_corridor_plan.corridor_valid
+        ):
+            return None
+        cp = self._last_corridor_plan
+        axis_norm = math.hypot(cp.tangent_dir_x, cp.tangent_dir_y)
+        if axis_norm > 1e-6:
+            ax = cp.tangent_dir_x / axis_norm
+            ay = cp.tangent_dir_y / axis_norm
+        else:
+            ax, ay = self._normalize_xy(self.approach_axis_world[0], self.approach_axis_world[1])
+        carrier_pos = self.carrier_odom.pose.pose.position
+        deck_x = carrier_pos.x + self.final_relative_position[0]
+        deck_y = carrier_pos.y + self.final_relative_position[1]
+        current_world_x = self.world_offset[0] + float(self.vehicle_local_position.x)
+        current_world_y = self.world_offset[1] + float(self.vehicle_local_position.y)
+        return (current_world_x - deck_x) * ax + (current_world_y - deck_y) * ay
+
     def _energy_guard_active(self) -> bool:
         if not self.energy_guard_enable:
             return False
@@ -2497,6 +2836,32 @@ class Px4FixedWingBridge(Node):
         delta_x = deck_x - current_world_x
         delta_y = deck_y - current_world_y
         distance_xy = math.hypot(delta_x, delta_y)
+
+        phase = self.docking_status.phase.upper() if self.docking_status is not None else "APPROACH"
+        corridor_plan_active = (
+            self._last_corridor_plan is not None and
+            self._last_corridor_plan.corridor_valid
+        )
+        corridor_height_guard_active = (
+            corridor_plan_active and
+            self.glide_tangent_exit_history_valid
+        )
+        if phase == "COMPLETED" and corridor_plan_active and not self.terminal_straight_active:
+            cp = self._last_corridor_plan
+            axis_norm = math.hypot(cp.tangent_dir_x, cp.tangent_dir_y)
+            if axis_norm > 1e-6:
+                ax = cp.tangent_dir_x / axis_norm
+                ay = cp.tangent_dir_y / axis_norm
+            else:
+                ax, ay = self._normalize_xy(self.approach_axis_world[0], self.approach_axis_world[1])
+            signed_gap = (current_world_x - deck_x) * ax + (current_world_y - deck_y) * ay
+            speed = self._completed_corridor_speed_command(distance_xy, signed_gap)
+            target_x = current_world_x + ax * speed * 1.5
+            target_y = current_world_y + ay * speed * 1.5
+            target_z = max(nominal_deck_z, current_world_z)
+            vz = max(min((target_z - current_world_z) * 0.25, 0.25), -0.25)
+            return [target_x, target_y, target_z], [ax * speed, ay * speed, vz]
+
         if distance_xy > 1e-3:
             direct_axis = self._normalize_xy(delta_x, delta_y)
         else:
@@ -2541,10 +2906,7 @@ class Px4FixedWingBridge(Node):
             target_progress = max(line_progress, 0.0) + lookahead
             target_x = self.glide_tangent_exit_anchor_world[0] + axis_x * target_progress
             target_y = self.glide_tangent_exit_anchor_world[1] + axis_y * target_progress
-            target_z = max(
-                nominal_deck_z + 0.45,
-                self.glide_tangent_exit_altitude - min(0.90, 0.28 * elapsed),
-            )
+            target_z = max(nominal_deck_z + self.terminal_sync_max_height_offset, self.glide_tangent_exit_altitude)
             lateral_velocity_correction = max(
                 -0.35 * self.glide_tangent_exit_lateral_limit,
                 min(
@@ -2554,9 +2916,10 @@ class Px4FixedWingBridge(Node):
             )
             velocity_x = axis_x * tangent_exit_speed - lateral_x * lateral_velocity_correction
             velocity_y = axis_y * tangent_exit_speed - lateral_y * lateral_velocity_correction
+            tangent_descent_rate = max(self.glide_descent_rate, self.terminal_sync_descent_rate, 0.9)
             velocity_z = max(
-                min((target_z - current_world_z) * 0.35, 0.35),
-                -0.35,
+                min((target_z - current_world_z) * 0.45, tangent_descent_rate),
+                -tangent_descent_rate,
             )
             self.approach_axis_world = [axis_x, axis_y]
             return [target_x, target_y, target_z], [velocity_x, velocity_y, velocity_z]
@@ -2721,10 +3084,12 @@ class Px4FixedWingBridge(Node):
             target_x = deck_x - axis_x * close_standoff - lateral_x * close_lateral_pull
             target_y = deck_y - axis_y * close_standoff - lateral_y * close_lateral_pull
             target_z = deck_z
+            if corridor_height_guard_active:
+                target_z = max(target_z, self.glide_tangent_exit_altitude)
             speed_cmd = min(speed_cmd, self.capture_speed_command if phase == "DOCKING" else speed_cmd)
             velocity_x = axis_x * speed_cmd - lateral_x * max(-1.8, min(1.8, 1.05 * lateral_error))
             velocity_y = axis_y * speed_cmd - lateral_y * max(-1.8, min(1.8, 1.05 * lateral_error))
-            velocity_z = max(min((deck_z - current_world_z) * 0.4, 0.5), -0.5)
+            velocity_z = max(min((target_z - current_world_z) * 0.4, 0.5), -0.5)
 
         if self.docking_status is not None and self.docking_status.phase.upper() == "COMPLETED":
             target_x = deck_x
@@ -2732,7 +3097,7 @@ class Px4FixedWingBridge(Node):
             target_z = actual_deck_z
             velocity_z = 0.0
 
-        if phase in {"TRACKING", "DOCKING"}:
+        if phase in {"TRACKING", "DOCKING"} and not corridor_height_guard_active:
             target_z = min(target_z, nominal_deck_z + 0.9)
 
         return [target_x, target_y, target_z], [velocity_x, velocity_y, velocity_z]
@@ -2862,6 +3227,10 @@ class Px4FixedWingBridge(Node):
         )
 
     def _current_climb_altitude(self) -> Optional[float]:
+        if self.vehicle_local_position is not None:
+            local_altitude = self.world_offset[2] - float(self.vehicle_local_position.z)
+            if math.isfinite(local_altitude):
+                return local_altitude
         if self.vehicle_global_position is None or self.takeoff_reference_alt_m is None:
             return None
         return float(self.vehicle_global_position.alt) - float(self.takeoff_reference_alt_m)
@@ -2897,6 +3266,22 @@ class Px4FixedWingBridge(Node):
         return names.get(value, str(value))
 
     @staticmethod
+    def _arm_disarm_reason_name(value: int) -> str:
+        names = {
+            int(VehicleStatus.ARM_DISARM_REASON_STICK_GESTURE): "stick",
+            int(VehicleStatus.ARM_DISARM_REASON_RC_SWITCH): "rc_switch",
+            int(VehicleStatus.ARM_DISARM_REASON_COMMAND_INTERNAL): "cmd_internal",
+            int(VehicleStatus.ARM_DISARM_REASON_COMMAND_EXTERNAL): "cmd_external",
+            int(VehicleStatus.ARM_DISARM_REASON_MISSION_START): "mission_start",
+            int(VehicleStatus.ARM_DISARM_REASON_LANDING): "landing",
+            int(VehicleStatus.ARM_DISARM_REASON_PREFLIGHT_INACTION): "preflight_inaction",
+            int(VehicleStatus.ARM_DISARM_REASON_KILL_SWITCH): "kill_switch",
+            int(VehicleStatus.ARM_DISARM_REASON_RC_BUTTON): "rc_button",
+            int(VehicleStatus.ARM_DISARM_REASON_FAILSAFE): "failsafe",
+        }
+        return names.get(value, str(value))
+
+    @staticmethod
     def _command_result_name(value: int) -> str:
         names = {
             int(VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED): "ACCEPTED",
@@ -2923,11 +3308,47 @@ class Px4FixedWingBridge(Node):
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
+    faulthandler.enable()
     rclpy.init()
     node = Px4FixedWingBridge()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except TypeError as exc:
+                message = str(exc)
+                if "unsupported operand type(s) for +: 'int' and 'NoneType'" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy waitable count glitch ignored; rebuilding fixed-wing executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except UnboundLocalError as exc:
+                message = str(exc)
+                if "local variable '_exit' referenced before assignment" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy context stack glitch ignored; rebuilding fixed-wing executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

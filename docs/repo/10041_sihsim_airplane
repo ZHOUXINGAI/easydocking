@@ -16,6 +16,11 @@ param set-default SENS_EN_BAROSIM 1
 param set-default SENS_EN_MAGSIM 1
 param set-default SENS_EN_ARSPDSIM 1
 
+# Keep fixed-wing SIH armed during takeoff/orbit handoff. The default auto-disarm
+# can false-trigger on early fixed-wing land detection during NAV_TAKEOFF -> LOITER.
+param set-default COM_DISARM_LAND 0
+param set-default COM_DISARM_PRFLT 0
+
 param set-default SIH_T_MAX 20
 param set-default SIH_MASS 0.3
 param set-default SIH_IXX 0.00402
@@ -26,6 +31,10 @@ param set-default SIH_KDV 0.2
 
 param set-default SIH_VEHICLE_TYPE 1 	# sih as fixed wing
 param set-default RWTO_TKOFF 1  # enable takeoff from runway (as opposed to launched)
+param set-default RWTO_MAX_THR 0.75
+param set-default FW_TKO_AIRSPD 12.0
+param set-default FW_P_LIM_MAX 20.0
+param set-default FW_R_LIM 40.0
 
 param set-default CA_ROTOR_COUNT 1
 param set-default CA_ROTOR0_PX 0.3
@@ -54,7 +63,7 @@ param set-default FW_AIRSPD_MAX 18.0
 param set-default FW_THR_TRIM 0.58
 param set-default FW_THR_ASPD_MIN 0.32
 param set-default FW_THR_ASPD_MAX 0.78
-param set-default FW_THR_MIN 0.20
+param set-default FW_THR_MIN 0.08
 
 # Rate controllers
 param set-default FW_RR_P 0.0500

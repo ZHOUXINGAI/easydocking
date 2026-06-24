@@ -106,7 +106,7 @@ class AutoStartDocking(Node):
         self.declare_parameter("orbit_center_y", -6.0)
         self.declare_parameter("orbit_radius", 80.0)
         self.declare_parameter("orbit_gate_ready_altitude", 28.0)
-        self.declare_parameter("orbit_gate_ready_radius_tolerance", 30.0)
+        self.declare_parameter("orbit_gate_ready_radius_tolerance", 6.0)
         self.declare_parameter("orbit_gate_min_valid_samples", 8)
         self.declare_parameter("orbit_gate_required_laps", 1.0)
         self.declare_parameter("orbit_gate_min_accumulated_angle_deg", 330.0)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import copy
+import faulthandler
 from collections import deque
 
 import rclpy
@@ -9,6 +10,30 @@ from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 class DockingVisualizer(Node):
@@ -229,6 +254,8 @@ class DockingVisualizer(Node):
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
+    faulthandler.enable()
     rclpy.init()
     node = DockingVisualizer()
     rclpy.spin(node)

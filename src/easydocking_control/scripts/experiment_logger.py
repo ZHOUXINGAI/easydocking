@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 
 import csv
+import faulthandler
 import os
-import time
 import math
+import time
+import traceback
 from pathlib import Path
 
 import rclpy
 from easydocking_msgs.msg import DockingStatus
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos_event import SubscriptionEventCallbacks
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Float64MultiArray
 
@@ -30,6 +34,30 @@ except ImportError:  # pragma: no cover
     VehicleAttitudeSetpoint = None
     VehicleGlobalPosition = None
     VehicleLocalPosition = None
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 def quaternion_to_euler_deg(w: float, x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -57,6 +85,8 @@ class ExperimentLogger(Node):
         self.declare_parameter("duration_sec", 30.0)
         self.declare_parameter("post_completed_settle_sec", 0.6)
         self.declare_parameter("post_completed_rows", 12)
+        self.declare_parameter("post_failed_settle_sec", 0.6)
+        self.declare_parameter("post_failed_rows", 12)
         self.declare_parameter("prototype_capture_distance_m", 1.25)
         self.declare_parameter("prototype_capture_rel_speed_mps", 0.45)
         self.declare_parameter("prototype_capture_sync_score", 0.90)
@@ -77,6 +107,10 @@ class ExperimentLogger(Node):
             self.get_parameter("post_completed_settle_sec").value
         )
         self.post_completed_rows = int(self.get_parameter("post_completed_rows").value)
+        self.post_failed_settle_sec = float(
+            self.get_parameter("post_failed_settle_sec").value
+        )
+        self.post_failed_rows = int(self.get_parameter("post_failed_rows").value)
         self.prototype_capture_distance_m = float(
             self.get_parameter("prototype_capture_distance_m").value
         )
@@ -101,6 +135,8 @@ class ExperimentLogger(Node):
         self.rows_written = 0
         self.completed_wall_time = None
         self.completed_rows_written = 0
+        self.failed_wall_time = None
+        self.failed_rows_written = 0
         self.prototype_capture_rows = 0
         self.mini_px4_namespace = str(self.get_parameter("mini_px4_namespace").value).rstrip("/")
 
@@ -288,37 +324,53 @@ class ExperimentLogger(Node):
         self.mini_energy_debug = [math.nan] * 6
         self.controller_debug = [math.nan] * 30
 
-        self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
-        self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10)
-        self.create_subscription(Odometry, "/mini/odom", self._mini_cb, 10)
-        self.create_subscription(PoseStamped, "/carrier/setpoint/pose", self._carrier_sp_cb, 10)
+        no_qos_events = SubscriptionEventCallbacks(use_default_callbacks=False)
         self.create_subscription(
-            TwistStamped, "/carrier/setpoint/velocity", self._carrier_cmd_vel_cb, 10
+            DockingStatus, "/docking/status", self._status_cb, 10,
+            event_callbacks=no_qos_events)
+        self.create_subscription(
+            Odometry, "/carrier/odom", self._carrier_cb, 10,
+            event_callbacks=no_qos_events)
+        self.create_subscription(
+            Odometry, "/mini/odom", self._mini_cb, 10,
+            event_callbacks=no_qos_events)
+        self.create_subscription(
+            PoseStamped, "/carrier/setpoint/pose", self._carrier_sp_cb, 10,
+            event_callbacks=no_qos_events)
+        self.create_subscription(
+            TwistStamped, "/carrier/setpoint/velocity", self._carrier_cmd_vel_cb, 10,
+            event_callbacks=no_qos_events
         )
-        self.create_subscription(PoseStamped, "/mini/glide_target", self._mini_target_cb, 10)
+        self.create_subscription(
+            PoseStamped, "/mini/glide_target", self._mini_target_cb, 10,
+            event_callbacks=no_qos_events)
         self.create_subscription(
             Float64MultiArray,
             "/mini/terminal_sync_debug",
             self._mini_terminal_sync_debug_cb,
             10,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             Float64MultiArray,
             "/mini/handoff_debug",
             self._mini_handoff_debug_cb,
             10,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             Float64MultiArray,
             "/mini/energy_debug",
             self._mini_energy_debug_cb,
             10,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
             Float64MultiArray,
             "/docking/controller_debug",
             self._controller_debug_cb,
             10,
+            event_callbacks=no_qos_events,
         )
 
         if all(obj is not None for obj in [
@@ -339,72 +391,84 @@ class ExperimentLogger(Node):
                 f"{self.mini_px4_namespace}/fmu/out/airspeed_validated",
                 self._mini_airspeed_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 AirspeedValidated,
                 f"{self.mini_px4_namespace}/fmu/out/airspeed_validated_v1",
                 self._mini_airspeed_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleGlobalPosition,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_global_position",
                 self._mini_global_pos_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleGlobalPosition,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_global_position_v1",
                 self._mini_global_pos_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleLocalPosition,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_local_position",
                 self._mini_local_pos_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleLocalPosition,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_local_position_v1",
                 self._mini_local_pos_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 TecsStatus,
                 f"{self.mini_px4_namespace}/fmu/out/tecs_status",
                 self._mini_tecs_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 TecsStatus,
                 f"{self.mini_px4_namespace}/fmu/out/tecs_status_v1",
                 self._mini_tecs_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 FixedWingLongitudinalSetpoint,
                 f"{self.mini_px4_namespace}/fmu/out/fixed_wing_longitudinal_setpoint",
                 self._mini_fw_longitudinal_sp_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 FixedWingLongitudinalSetpoint,
                 f"{self.mini_px4_namespace}/fmu/out/fixed_wing_longitudinal_setpoint_v1",
                 self._mini_fw_longitudinal_sp_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleAttitudeSetpoint,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_attitude_setpoint",
                 self._mini_attitude_sp_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
             self.create_subscription(
                 VehicleAttitudeSetpoint,
                 f"{self.mini_px4_namespace}/fmu/out/vehicle_attitude_setpoint_v1",
                 self._mini_attitude_sp_cb,
                 px4_qos,
+                event_callbacks=no_qos_events,
             )
         self.timer = self.create_timer(0.05, self._flush_row)
 
@@ -702,6 +766,8 @@ class ExperimentLogger(Node):
             f"{self.controller_debug[29]:.6f}",
         ])
         self.rows_written += 1
+        if self.rows_written % 20 == 0:
+            self.csv_file.flush()
 
         if self.latest_status.phase == "COMPLETED":
             if self.completed_wall_time is None:
@@ -714,6 +780,18 @@ class ExperimentLogger(Node):
                 self.completed_rows_written >= self.post_completed_rows
             ):
                 self._finalize("completed")
+                return
+        elif self.latest_status.phase == "FAILED":
+            if self.failed_wall_time is None:
+                self.failed_wall_time = time.time()
+                self.failed_rows_written = 0
+            self.failed_rows_written += 1
+            elapsed_after_failed = time.time() - self.failed_wall_time
+            if (
+                elapsed_after_failed >= self.post_failed_settle_sec and
+                self.failed_rows_written >= self.post_failed_rows
+            ):
+                self._finalize("failed")
                 return
         else:
             sync_score = self.mini_terminal_sync_debug[2]
@@ -755,23 +833,57 @@ class ExperimentLogger(Node):
             file.write(f"rows={self.rows_written}\n")
             file.write(f"phase={self.latest_phase}\n")
             file.write(f"completed_rows={self.completed_rows_written}\n")
+            file.write(f"failed_rows={self.failed_rows_written}\n")
             file.write(
                 f"post_completed_settle_sec={self.post_completed_settle_sec:.3f}\n"
             )
             file.write(f"post_completed_rows={self.post_completed_rows}\n")
+            file.write(f"post_failed_settle_sec={self.post_failed_settle_sec:.3f}\n")
+            file.write(f"post_failed_rows={self.post_failed_rows}\n")
             file.write(f"csv={self.csv_path}\n")
         self.get_logger().info(f"Experiment finished: {reason}, rows={self.rows_written}")
         raise SystemExit(0)
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
+    faulthandler.enable()
     rclpy.init()
     node = ExperimentLogger()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except TypeError as exc:
+                stack = traceback.format_exc()
+                if "rclpy/executors.py" not in stack and "rclpy/waitable.py" not in stack:
+                    raise
+                node.get_logger().warn(
+                    f"rclpy executor glitch ignored; rebuilding logger executor: {exc}"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except UnboundLocalError as exc:
+                message = str(exc)
+                if "local variable '_exit' referenced before assignment" not in message:
+                    raise
+                node.get_logger().warn(
+                    f"rclpy context stack glitch ignored; rebuilding logger executor: {exc}"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
     except SystemExit:
         pass
     finally:
+        executor.shutdown()
         if not node.csv_file.closed:
             node.csv_file.close()
         node.destroy_node()

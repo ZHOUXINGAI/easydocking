@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 
+import faulthandler
+import math
+import time
+
 import rclpy
 from easydocking_msgs.msg import DockingStatus
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Quaternion
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos_event import SubscriptionEventCallbacks
 
 try:
     from px4_msgs.msg import VehicleLocalPosition, VehicleOdometry, VehicleStatus
@@ -13,6 +19,30 @@ except ImportError:  # pragma: no cover
     VehicleLocalPosition = None
     VehicleOdometry = None
     VehicleStatus = None
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 class Px4OdomBridge(Node):
@@ -23,6 +53,9 @@ class Px4OdomBridge(Node):
         self.declare_parameter("world_frame", "map")
         self.declare_parameter("world_offset", [0.0, 0.0, 0.0])
         self.declare_parameter("attach_relative_position", [0.0, 0.0, 0.8])
+        self.declare_parameter("attach_on_completed", False)
+        self.declare_parameter("freeze_disarmed_speed_threshold", 0.8)
+        self.declare_parameter("freeze_disarmed_altitude_threshold", 1.0)
 
         if VehicleOdometry is None or VehicleStatus is None or VehicleLocalPosition is None:
             self.get_logger().error("px4_msgs is not installed, cannot bridge odometry.")
@@ -37,10 +70,18 @@ class Px4OdomBridge(Node):
         self.attach_relative_position = [
             float(value) for value in self.get_parameter("attach_relative_position").value
         ]
+        self.attach_on_completed = bool(self.get_parameter("attach_on_completed").value)
+        self.freeze_disarmed_speed_threshold = float(
+            self.get_parameter("freeze_disarmed_speed_threshold").value
+        )
+        self.freeze_disarmed_altitude_threshold = float(
+            self.get_parameter("freeze_disarmed_altitude_threshold").value
+        )
         self.controller_active = False
         self.current_phase = "IDLE"
         self.arming_state = None
         self.frozen_odom = None
+        self.disarmed_motion_passthrough_logged = False
         self.carrier_odom = None
         self.local_position = None
         self.last_odom_received_time_sec = None
@@ -52,6 +93,7 @@ class Px4OdomBridge(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
+        self.no_qos_events = SubscriptionEventCallbacks(use_default_callbacks=False)
         self._subscribe_vehicle_odometry_topics(px4_qos)
         self._subscribe_vehicle_status_topics(px4_qos)
         self._subscribe_local_position_topics(px4_qos)
@@ -60,6 +102,7 @@ class Px4OdomBridge(Node):
             "/docking/status",
             self._status_cb,
             10,
+            event_callbacks=self.no_qos_events,
         )
         if self.uav_name == "mini":
             self.create_subscription(
@@ -67,6 +110,7 @@ class Px4OdomBridge(Node):
                 "/carrier/odom",
                 self._carrier_odom_cb,
                 10,
+                event_callbacks=self.no_qos_events,
             )
 
     def _vehicle_status_cb(self, msg: VehicleStatus) -> None:
@@ -85,6 +129,7 @@ class Px4OdomBridge(Node):
                 f"{self.px4_namespace}/fmu/out/{topic}",
                 lambda msg, topic_name=topic: self._odom_cb(msg, topic_name),
                 px4_qos,
+                event_callbacks=self.no_qos_events,
             )
 
     def _subscribe_vehicle_status_topics(self, px4_qos: QoSProfile) -> None:
@@ -100,6 +145,7 @@ class Px4OdomBridge(Node):
                 f"{self.px4_namespace}/fmu/out/{topic}",
                 self._vehicle_status_cb,
                 px4_qos,
+                event_callbacks=self.no_qos_events,
             )
 
     def _subscribe_local_position_topics(self, px4_qos: QoSProfile) -> None:
@@ -115,6 +161,7 @@ class Px4OdomBridge(Node):
                 f"{self.px4_namespace}/fmu/out/{topic}",
                 lambda msg, topic_name=topic: self._local_position_cb(msg, topic_name),
                 px4_qos,
+                event_callbacks=self.no_qos_events,
             )
 
     def _status_cb(self, msg: DockingStatus) -> None:
@@ -131,6 +178,7 @@ class Px4OdomBridge(Node):
     ) -> None:
         self.local_position = msg
         if (
+            self.attach_on_completed and
             self.uav_name == "mini" and
             self.current_phase == "COMPLETED" and
             self.carrier_odom is not None
@@ -175,6 +223,7 @@ class Px4OdomBridge(Node):
         source_topic: str = "vehicle_odometry",
     ) -> None:
         if (
+            self.attach_on_completed and
             self.uav_name == "mini" and
             self.current_phase == "COMPLETED" and
             self.carrier_odom is not None
@@ -238,6 +287,26 @@ class Px4OdomBridge(Node):
             self.arming_state == VehicleStatus.ARMING_STATE_DISARMED
         )
         if should_freeze:
+            speed = math.sqrt(
+                odom.twist.twist.linear.x * odom.twist.twist.linear.x +
+                odom.twist.twist.linear.y * odom.twist.twist.linear.y +
+                odom.twist.twist.linear.z * odom.twist.twist.linear.z
+            )
+            altitude = abs(float(odom.pose.pose.position.z))
+            moving_or_airborne = (
+                speed > self.freeze_disarmed_speed_threshold or
+                altitude > self.freeze_disarmed_altitude_threshold
+            )
+            if moving_or_airborne:
+                if not self.disarmed_motion_passthrough_logged:
+                    self.disarmed_motion_passthrough_logged = True
+                    self.get_logger().warn(
+                        f"{self.uav_name}: disarmed but moving/airborne; "
+                        f"publishing live odom speed={speed:.2f} altitude={altitude:.2f}"
+                    )
+                self.frozen_odom = odom
+                self.publisher.publish(odom)
+                return
             if self.frozen_odom is None:
                 self.frozen_odom = odom
             frozen = Odometry()
@@ -254,16 +323,65 @@ class Px4OdomBridge(Node):
             self.publisher.publish(frozen)
             return
 
+        self.disarmed_motion_passthrough_logged = False
         self.frozen_odom = odom
         self.publisher.publish(odom)
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
+    faulthandler.enable()
     rclpy.init()
     node = Px4OdomBridge()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except TypeError as exc:
+                message = str(exc)
+                if "unsupported operand type(s) for +: 'int' and 'NoneType'" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy waitable count glitch ignored; rebuilding odom executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except UnboundLocalError as exc:
+                message = str(exc)
+                if "local variable '_exit' referenced before assignment" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy context stack glitch ignored; rebuilding odom executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except RuntimeError as exc:
+                message = str(exc)
+                if "Unable to convert call argument to Python object" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy subscription conversion glitch ignored; rebuilding odom executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

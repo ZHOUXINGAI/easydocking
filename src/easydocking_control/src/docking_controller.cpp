@@ -1139,7 +1139,11 @@ void DockingController::computeCorridorPlan()
 	}
 
 	const double R = mini_orbit_radius_;
-	const double orbit_speed = mini_orbit_speed_;
+	const double measured_orbit_speed = std::hypot(mini_twist_.linear.x, mini_twist_.linear.y);
+	const double orbit_speed =
+		(measured_orbit_speed > 1.0)
+			? std::max(mini_orbit_speed_, measured_orbit_speed)
+			: mini_orbit_speed_;
 	const double omega = orbit_speed / R;
 	const Eigen::Vector2d O(mini_orbit_center_.x(), mini_orbit_center_.y());
 	const Eigen::Vector2d C(carrier_pos.x(), carrier_pos.y());
@@ -1172,16 +1176,21 @@ void DockingController::computeCorridorPlan()
 	Eigen::Vector2d T = score_1 >= score_2 ? T1 : T2;
 	Eigen::Vector2d tang = tang_dir(theta_T);
 
-	// Mini timing: use configured start phase (stable), not current position
-	// (current position is unreliable during PX4 takeoff)
-	const double theta_m = mini_orbit_start_phase_deg_ * M_PI / 180.0;
+	// Mini timing: use the measured orbit phase at START when it is plausible.
+	// PX4 takeoff odom can drift, but the measured orbit state is still a
+	// better guard than forcing an extra full orbit.
+	const Eigen::Vector2d OM = M - O;
+	const double measured_radius = OM.norm();
+	const bool measured_phase_valid =
+		measured_radius > 0.35 * R && measured_radius < 2.50 * R;
+	const double theta_m = measured_phase_valid
+		? std::atan2(OM.y(), OM.x())
+		: mini_orbit_start_phase_deg_ * M_PI / 180.0;
 	double delta_theta = theta_T - theta_m;
-	if (delta_theta < 0.0) { delta_theta += 2.0 * M_PI; }
-	const double t_mini = delta_theta / omega;
+	while (delta_theta <= 0.0) { delta_theta += 2.0 * M_PI; }
 
 	// Circular arc trajectory: from C to T, tangent to mini's orbit at T.
 	// Arc center M_arc lies on the line O→T. Radius r satisfies |C-M|=|T-M|=r.
-	const Eigen::Vector2d u = (T - O).normalized();  // O→T unit vector
 	const double d = d_oc;
 	const double cos_alpha = OC.dot(T - O) / (d * R);
 	const double numer = d * d - R * R;
@@ -1200,7 +1209,7 @@ void DockingController::computeCorridorPlan()
 	const double arc_len = r_arc * std::abs(dphi);
 
 	// Target Z: idle hover altitude (30m), must match mini orbit altitude
-	const double target_z = mini_pos.z();
+	const double target_z = idle_hover_altitude_;
 	corridor_traj_start_ = Eigen::Vector3d(C.x(), C.y(), carrier_pos.z());
 	corridor_traj_end_   = Eigen::Vector3d(T.x(), T.y(), target_z);
 	corridor_traj_start_time_ = 0.0;
@@ -1212,16 +1221,24 @@ void DockingController::computeCorridorPlan()
 	corridor_arc_phi_start_ = phi_start;
 	corridor_arc_delta_phi_ = dphi;
 
-	// Set arc speed to a natural value (not t_mini-matched).
-	// Carrier flies arc at consistent speed, then continues on tangent.
-	// Mini catches up from behind at its natural speed.
-	// Arc at 8 m/s. Hold at launch for timing: hold = t_mini - t_arc
-	const double arc_speed = 8.0;
-	corridor_traj_duration_ = arc_len / arc_speed;
-	corridor_planned_speed_ = arc_speed;
+	// Time-parameterize the carrier arc so it reaches T before the mini.
+	// The resulting lead gives the fixed-wing several seconds on the tangent
+	// to settle speed/height before terminal closure.
+	const double carrier_corridor_speed_max =
+		std::max(0.1, std::min(7.2, carrier_approach_speed_limit_));
+	const double min_carrier_duration = arc_len / carrier_corridor_speed_max;
+	const double carrier_corridor_speed_min = 1.5;
+	const double max_carrier_duration = arc_len / carrier_corridor_speed_min;
+	const double px4_overspeed = std::max(0.0, orbit_speed - mini_orbit_speed_);
+	const double terminal_lead_time = clampValue(1.2 + px4_overspeed / 4.0, 1.2, 2.0);
+	const double t_mini = std::max(delta_theta / omega, 0.1);
+	corridor_traj_duration_ = clampValue(
+		t_mini - terminal_lead_time,
+		min_carrier_duration,
+		max_carrier_duration);
+	corridor_planned_speed_ = arc_len / corridor_traj_duration_;
 	corridor_mini_arrival_delay_ = t_mini;
-	// Hold at launch so arc completes when mini reaches T
-	corridor_hold_duration_ = std::max(0.0, t_mini - corridor_traj_duration_);
+	corridor_hold_duration_ = 0.0;
 
 	double trigger_phase = theta_T;
 	while (trigger_phase < 0.0) { trigger_phase += 2.0 * M_PI; }
@@ -1297,7 +1314,23 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
     if (corridor_plan_valid_ && corridor_traj_active_) {
       ++corridor_traj_counter_;
       const double elapsed = corridor_traj_counter_ / control_rate_;
-      const double frac = clampValue(elapsed / std::max(corridor_traj_duration_, 0.1), 0.0, 1.0);
+      const double duration = std::max(corridor_traj_duration_, 0.1);
+      const double tau = clampValue(elapsed / duration, 0.0, 1.0);
+      const double arc_exit_speed_target =
+        clampValue(0.65 * std::max(mini_orbit_speed_, 8.0), corridor_planned_speed_, 6.2);
+      const double max_exit_speed_for_average =
+        std::max(corridor_planned_speed_, 2.0 * corridor_planned_speed_ - 1.4);
+      const double arc_exit_speed =
+        std::min(arc_exit_speed_target, max_exit_speed_for_average);
+      const double arc_entry_speed =
+        std::max(0.6, 2.0 * corridor_planned_speed_ - arc_exit_speed);
+      const double planned_arc_speed =
+        arc_entry_speed + (arc_exit_speed - arc_entry_speed) * tau;
+      const double frac = clampValue(
+        (arc_entry_speed * tau + 0.5 * (arc_exit_speed - arc_entry_speed) * tau * tau) /
+          std::max(corridor_planned_speed_, 0.1),
+        0.0,
+        1.0);
       const double phi = corridor_arc_phi_start_ + frac * corridor_arc_delta_phi_;
       const double c = std::cos(phi);
       const double s = std::sin(phi);
@@ -1310,67 +1343,213 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           : Eigen::Vector2d(s, -c);
       const double z_start = corridor_traj_start_.z();
       const double z_end   = corridor_traj_end_.z();
-      const Eigen::Vector3d traj_pos(pos_2d.x(), pos_2d.y(),
-                                      z_start + frac * (z_end - z_start));
-      // Z correction during arc: pull carrier toward mini's altitude
+      const Eigen::Vector3d mini_pos_current = poseToEigen(mini_pose_);
+      const double terminal_rel_z_target = terminal_relative_position_.z();
+      const double nominal_z = z_start + frac * (z_end - z_start);
+      const double desired_carrier_z = mini_pos_current.z() - terminal_rel_z_target;
+      const double z_pre_align_blend = clampValue((frac - 0.35) / 0.45, 0.0, 1.0);
+      const Eigen::Vector3d traj_pos(
+        pos_2d.x(),
+        pos_2d.y(),
+        nominal_z + z_pre_align_blend * (desired_carrier_z - nominal_z));
       const double z_nominal_vel = (z_end - z_start) / std::max(corridor_traj_duration_, 0.1);
-      const double z_correction = 0.4 * (relative_pos.z() - 0.3);
+      const double z_error = relative_pos.z() - terminal_rel_z_target;
+      const double z_pre_align_vel = clampValue(
+        0.65 * z_error + 0.15 * relative_vel.z(),
+        -2.2,
+        2.2);
       const Eigen::Vector3d traj_vel(
-        tang_2d.x() * corridor_planned_speed_,
-        tang_2d.y() * corridor_planned_speed_,
-        z_nominal_vel + z_correction);
+        tang_2d.x() * planned_arc_speed,
+        tang_2d.y() * planned_arc_speed,
+        clampValue(z_nominal_vel + z_pre_align_vel, -2.2, 2.2));
 
       carrier_position_setpoint_ = traj_pos;
       carrier_velocity_command_ = traj_vel;
       mini_velocity_command_.setZero();
       mini_position_setpoint_ = poseToEigen(mini_pose_);
 
-      // Phase 2: two-stage terminal docking.
-      // Stage 1 (gap > 10m): step speed for coarse closure.
-      // Stage 2 (gap ≤ 10m): PD controller for fine gap + Z constraint.
-      // Target: signed_gap = -0.5m (carrier 0.5m ahead), mini 0.3m above carrier.
+      // Phase 2: formation flight with gap feedback.
+      // Carrier slows down to let mini close the gap.
       if (frac >= 0.99) {
         const double phase2_t = elapsed - corridor_traj_duration_;
         const double signed_gap = relative_pos.dot(corridor_tangent_dir_);
         const double abs_gap = std::abs(signed_gap);
         const double rel_z = relative_pos.z();  // >0 means mini above carrier
+        const Eigen::Vector3d lateral_dir(
+          -corridor_tangent_dir_.y(), corridor_tangent_dir_.x(), 0.0);
+        const double lateral_gap = relative_pos.dot(lateral_dir);
         const double rel_vel_along = relative_vel.dot(corridor_tangent_dir_);
-        double speed;
-        double vz = 0.0;
-
-        if (abs_gap > 5.0) {
-          // Stage 1: step speed for coarse gap closure
-          speed = 7.2;
-          if (abs_gap > 30.0)          speed = 6.0;
-          else if (abs_gap > 15.0)     speed = 6.5;
-          else if (abs_gap > 8.0)      speed = 7.0;
-          if (signed_gap > 1.0)        speed = 8.5;  // mini ahead
-          // Gentle Z correction during coarse phase too
-          vz = 0.5 * (rel_z - 0.3);
-          vz = clampValue(vz, -1.5, 1.5);
-        } else {
-          // Stage 2: PD control for fine terminal docking
-          // Along-track: PD on signed gap, target carrier 0.5m ahead
-          const double gap_error = signed_gap + 0.5;  // 0 when carrier 0.5m ahead
-          speed = 8.0 + 0.5 * gap_error + 0.2 * rel_vel_along;
-          speed = clampValue(speed, 6.0, 9.0);
-          // Z: PD to keep mini 0.3m above carrier
-          const double z_error = rel_z - 0.3;
-          vz = 0.6 * z_error - 0.2 * relative_vel.z();
-          vz = clampValue(vz, -1.5, 1.5);
+        const double rel_vel_lateral = relative_vel.dot(lateral_dir);
+        const bool front_guard_window =
+          phase2_t > 0.5 &&
+          relative_pos.norm() < 12.0 &&
+          std::abs(lateral_gap) < 6.0;
+        const double mini_speed_along_raw =
+          Eigen::Vector3d(
+            mini_twist_.linear.x,
+            mini_twist_.linear.y,
+            0.0).dot(corridor_tangent_dir_);
+        const double mini_speed_along =
+          std::isfinite(mini_speed_along_raw)
+            ? std::max(0.0, mini_speed_along_raw)
+            : mini_orbit_speed_;
+        double target_closure_rate = 0.35;
+        if (signed_gap < -80.0) {
+          target_closure_rate = 2.6;
+        } else if (signed_gap < -40.0) {
+          target_closure_rate = 2.3;
+        } else if (signed_gap < -20.0) {
+          target_closure_rate = 2.0;
+        } else if (signed_gap < -8.0) {
+          target_closure_rate = 1.5;
+        } else if (signed_gap < -3.0) {
+          target_closure_rate = 1.0;
+        } else if (signed_gap < -1.0) {
+          target_closure_rate = 0.85;
+        } else if (signed_gap < -0.45) {
+          target_closure_rate = 0.55;
+        } else if (signed_gap < -0.18) {
+          target_closure_rate = 0.25;
+        }
+        double speed = mini_speed_along - target_closure_rate;
+        const bool completed_phase = current_phase_ == DockingPhase::COMPLETED;
+        const double final_desired_signed_gap =
+          completed_phase ? -0.10 : -0.18;  // negative: carrier stays ahead
+        const double gap_schedule_alpha =
+          clampValue((4.0 - abs_gap) / 3.4, 0.0, 1.0);
+        const double desired_signed_gap =
+          -0.42 + gap_schedule_alpha * (final_desired_signed_gap + 0.42);
+        if (abs_gap < 4.0) {
+          const double gap_error = signed_gap - desired_signed_gap;
+          const double gap_velocity_correction = clampValue(
+            1.15 * gap_error + 0.34 * rel_vel_along,
+            -1.20,
+            1.05);
+          speed = mini_speed_along + gap_velocity_correction;
+        }
+        const double front_guard_gap = completed_phase ? -0.12 : -0.30;
+        if (signed_gap > front_guard_gap) {
+          const double front_guard_boost =
+            clampValue(0.45 + 1.10 * (signed_gap - front_guard_gap), 0.45, 1.15);
+          speed = std::max(speed, mini_speed_along + front_guard_boost);
+        }
+        if (completed_phase && signed_gap < desired_signed_gap) {
+          const double completed_gap_trim =
+            clampValue(0.45 + 1.10 * (desired_signed_gap - signed_gap), 0.45, 1.0);
+          speed = std::min(speed, mini_speed_along - completed_gap_trim);
+        }
+        if (rel_z < 0.16 && relative_pos.norm() < 4.0 && signed_gap > -0.45) {
+          const double z_guard_front_boost =
+            clampValue(0.40 + 1.00 * (0.16 - rel_z), 0.40, 0.90);
+          speed = std::max(speed, mini_speed_along + z_guard_front_boost);
+        }
+        const double phase2_speed_limit =
+          std::min(10.0, std::max(9.2, carrier_tracking_speed_limit_));
+        const bool terminal_z_ready = rel_z > 0.15 && rel_z < 0.30;
+        if (
+          !terminal_z_ready &&
+          relative_pos.norm() < 1.2 &&
+          signed_gap > -0.45)
+        {
+          speed = std::max(speed, std::min(phase2_speed_limit, mini_speed_along + 0.75));
+        }
+        speed = clampValue(speed, 4.6, phase2_speed_limit);
+        const double phase2_speed_ramp_accel = 1.45;
+        const double phase2_elapsed = std::max(0.0, phase2_t);
+        const double phase2_speed_ceiling =
+          std::min(phase2_speed_limit, arc_exit_speed + phase2_speed_ramp_accel * phase2_elapsed);
+        const bool front_guard_critical =
+          signed_gap > -3.50 || (relative_pos.norm() < 2.0 && rel_z < 0.12);
+        if (!front_guard_critical) {
+          speed = std::min(speed, phase2_speed_ceiling);
         }
 
-        carrier_velocity_command_ =
-          corridor_tangent_dir_ * speed + Eigen::Vector3d(0.0, 0.0, vz);
-        carrier_position_setpoint_ =
-          corridor_traj_end_ + carrier_velocity_command_ * phase2_t;
+        const double lateral_speed = clampValue(
+          2.20 * lateral_gap + 0.75 * rel_vel_lateral,
+          -2.20,
+          2.20);
 
-        // Complete: gap < 0.15m, carrier ahead, mini above carrier 0.1-0.5m
-        // Timeout: 25s for PX4 glide closure (6.0-7.2 m/s vs mini 8+ m/s)
-        if (phase2_t > 25.0 ||
-            (abs_gap < 0.15 && signed_gap < 0 && rel_z > 0.1 && rel_z < 0.5)) {
-          corridor_plan_valid_ = false;
+        const double phase2_z_error = rel_z - terminal_rel_z_target;
+        const double phase2_vz = clampValue(
+          2.10 * phase2_z_error + 0.16 * relative_vel.z(),
+          -2.2,
+          2.2);
+        carrier_velocity_command_ =
+          corridor_tangent_dir_ * speed + lateral_dir * lateral_speed;
+        const double phase2_horizontal_speed =
+          std::hypot(carrier_velocity_command_.x(), carrier_velocity_command_.y());
+        if (
+          phase2_horizontal_speed > phase2_speed_limit &&
+          phase2_horizontal_speed > 1e-6)
+        {
+          carrier_velocity_command_.x() *= phase2_speed_limit / phase2_horizontal_speed;
+          carrier_velocity_command_.y() *= phase2_speed_limit / phase2_horizontal_speed;
+        }
+        carrier_velocity_command_.z() = phase2_vz;
+        carrier_position_setpoint_ =
+          carrier_pos + carrier_velocity_command_ * 0.12;
+        carrier_position_setpoint_.z() = mini_pos_current.z() - terminal_rel_z_target;
+
+        // Complete only on real corridor gap closure; timeout is a failed run,
+        // not a successful docking event.
+        const Eigen::Vector3d mini_velocity_xy(
+          mini_twist_.linear.x,
+          mini_twist_.linear.y,
+          0.0);
+        const double mini_speed_xy = mini_velocity_xy.norm();
+        bool precision_completion_envelope = false;
+        bool soft_completion_envelope = false;
+        if (mini_speed_xy > 6.0) {
+          const Eigen::Vector3d mini_forward_dir = mini_velocity_xy / mini_speed_xy;
+          const Eigen::Vector3d mini_lateral_dir(
+            -mini_forward_dir.y(), mini_forward_dir.x(), 0.0);
+          const double precision_along = relative_pos.dot(mini_forward_dir);
+          const double precision_lateral = relative_pos.dot(mini_lateral_dir);
+          const double precision_along_rate = relative_vel.dot(mini_forward_dir);
+          const double precision_lateral_rate = relative_vel.dot(mini_lateral_dir);
+          const double precision_terminal_error =
+            std::sqrt(
+              std::pow(precision_along + 0.10, 2.0) +
+              std::pow(precision_lateral, 2.0) +
+              std::pow(rel_z - terminal_rel_z_target, 2.0));
+          precision_completion_envelope =
+            precision_along < -0.06 &&
+            precision_along > -0.18 &&
+            std::abs(precision_lateral) < 0.10 &&
+            relative_pos.norm() < 0.34 &&
+            rel_z > 0.15 &&
+            rel_z < 0.30 &&
+            precision_terminal_error < 0.105 &&
+            std::abs(precision_along_rate) < 0.70 &&
+            std::abs(precision_lateral_rate) < 0.70 &&
+            relative_vel.norm() < 0.75;
+          soft_completion_envelope =
+            precision_along < -0.04 &&
+            precision_along > -0.36 &&
+            std::abs(precision_lateral) < 0.18 &&
+            relative_pos.norm() < 0.36 &&
+            rel_z > 0.14 &&
+            rel_z < 0.36 &&
+            std::abs(precision_along_rate) < 0.75 &&
+            std::abs(precision_lateral_rate) < 0.75 &&
+            relative_vel.norm() < 0.75;
+        }
+        if (precision_completion_envelope || soft_completion_envelope) {
+          completion_hold_counter_++;
+        } else {
+          completion_hold_counter_ = 0;
+        }
+        const int phase2_completion_hold_steps = 1;
+        if (completion_hold_counter_ >= phase2_completion_hold_steps) {
           current_phase_ = DockingPhase::COMPLETED;
+        } else if (front_guard_window && signed_gap > 0.08) {
+          completion_hold_counter_ = 0;
+          corridor_plan_valid_ = false;
+          current_phase_ = DockingPhase::FAILED;
+        } else if (phase2_t > 90.0) {
+          completion_hold_counter_ = 0;
+          corridor_plan_valid_ = false;
+          current_phase_ = DockingPhase::FAILED;
         }
         carrier_cmd.linear.x = carrier_velocity_command_(0);
         carrier_cmd.linear.y = carrier_velocity_command_(1);

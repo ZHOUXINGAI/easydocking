@@ -391,7 +391,7 @@ def compute_start_intercept_metrics(rows, metadata):
         return metrics
 
     horizon = metadata_float(metadata, "auto_start_rear_entry_prediction_horizon_sec", 6.0)
-    carrier_speed = metadata_float(metadata, "auto_start_rear_entry_prediction_carrier_speed_mps", 9.5)
+    carrier_speed = metadata_float(metadata, "auto_start_rear_entry_prediction_carrier_speed_mps", 10.0)
     tangent_weight = metadata_float(metadata, "auto_start_rear_entry_prediction_tangent_weight", 0.65)
     lateral_max = metadata_float(metadata, "auto_start_rear_entry_prediction_lateral_max_m", 20.0)
     along_min_cfg = metadata_float(metadata, "auto_start_rear_entry_prediction_along_min_m", 10.0)

@@ -150,8 +150,9 @@ private:
       this->create_publisher<easydocking_msgs::msg::DockingStatus>("/docking/status", 10);
     controller_debug_pub_ =
       this->create_publisher<std_msgs::msg::Float64MultiArray>("/docking/controller_debug", 10);
+    auto corridor_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
     corridor_plan_pub_ =
-      this->create_publisher<easydocking_msgs::msg::CorridorPlan>("/docking/corridor_plan", 10);
+      this->create_publisher<easydocking_msgs::msg::CorridorPlan>("/docking/corridor_plan", corridor_qos);
   }
 
   void carrierOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)

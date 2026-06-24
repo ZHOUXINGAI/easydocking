@@ -9,14 +9,40 @@ from typing import Optional
 import rclpy
 from easydocking_msgs.msg import DockingCommand
 from nav_msgs.msg import Odometry
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos_event import SubscriptionEventCallbacks
 
 try:
     from px4_msgs.msg import AirspeedValidated, TecsStatus
 except ImportError:  # pragma: no cover
     AirspeedValidated = None
     TecsStatus = None
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 class DockingWindowStarter(Node):
@@ -35,8 +61,8 @@ class DockingWindowStarter(Node):
         self.declare_parameter("min_wait_sec", 0.0)
         self.declare_parameter("publish_repeats", 2)
         self.declare_parameter("fallback_immediate", True)
-        self.declare_parameter("release_on_orbit_completion", False)
-        self.declare_parameter("release_after_orbit_delay_sec", 0.0)
+        self.declare_parameter("release_on_orbit_completion", True)
+        self.declare_parameter("release_after_orbit_delay_sec", 2.0)
         self.declare_parameter("prefer_rear_entry", True)
         self.declare_parameter("rear_entry_distance_min_m", 145.0)
         self.declare_parameter("rear_entry_distance_max_m", 185.0)
@@ -48,7 +74,7 @@ class DockingWindowStarter(Node):
         self.declare_parameter("rear_entry_use_prediction_gate", True)
         self.declare_parameter("rear_entry_prediction_primary_gate", False)
         self.declare_parameter("rear_entry_prediction_horizon_sec", 6.0)
-        self.declare_parameter("rear_entry_prediction_carrier_speed_mps", 9.5)
+        self.declare_parameter("rear_entry_prediction_carrier_speed_mps", 10.0)
         self.declare_parameter("rear_entry_prediction_tangent_weight", 0.65)
         self.declare_parameter("rear_entry_prediction_lateral_max_m", 20.0)
         self.declare_parameter("rear_entry_prediction_along_min_m", 10.0)
@@ -84,7 +110,9 @@ class DockingWindowStarter(Node):
         self.declare_parameter("rear_entry_global_intercept_time_weight", 0.35)
         self.declare_parameter("rear_entry_global_intercept_max_accel_mps2", 2.5)
         self.declare_parameter("rear_entry_require_global_primary_gate", False)
-        self.declare_parameter("rear_entry_global_intercept_primary_score_threshold", 5.7)
+        self.declare_parameter("rear_entry_global_intercept_primary_score_threshold", 6.6)
+        self.declare_parameter("rear_entry_global_intercept_min_rel_distance_m", 44.5)
+        self.declare_parameter("rear_entry_global_intercept_min_speed_margin_mps", 1.45)
         self.declare_parameter("rear_entry_require_non_diverging", True)
         self.declare_parameter("rear_entry_tca_min_sec", 0.8)
         self.declare_parameter("rear_entry_tca_max_sec", 12.0)
@@ -92,10 +120,10 @@ class DockingWindowStarter(Node):
         self.declare_parameter("rear_entry_orbit_phase_center_deg", -95.0)
         self.declare_parameter("rear_entry_orbit_phase_window_deg", 30.0)
         self.declare_parameter("rear_entry_min_mini_vx_mps", 2.0)
-        self.declare_parameter("rear_entry_allow_orbit_progress_release", True)
-        self.declare_parameter("rear_entry_min_orbit_progress_ratio", 0.92)
+        self.declare_parameter("rear_entry_allow_orbit_progress_release", False)
+        self.declare_parameter("rear_entry_min_orbit_progress_ratio", 1.0)
         self.declare_parameter("rear_entry_enable_energy_timing_gate", True)
-        self.declare_parameter("rear_entry_energy_min_after_orbit_sec", 26.0)
+        self.declare_parameter("rear_entry_energy_min_after_orbit_sec", 28.0)
         self.declare_parameter("rear_entry_energy_max_after_orbit_sec", 40.0)
         self.declare_parameter("rear_entry_energy_allow_max_relaxation", True)
         self.declare_parameter("rear_entry_energy_early_release_enabled", True)
@@ -113,12 +141,12 @@ class DockingWindowStarter(Node):
         self.declare_parameter("orbit_center_x", 10.0)
         self.declare_parameter("orbit_center_y", -6.0)
         self.declare_parameter("orbit_radius", 80.0)
-        self.declare_parameter("orbit_gate_ready_altitude", 28.0)
-        self.declare_parameter("orbit_gate_ready_radius_tolerance", 30.0)
-        self.declare_parameter("orbit_gate_min_valid_samples", 8)
+        self.declare_parameter("orbit_gate_ready_altitude", 38.0)
+        self.declare_parameter("orbit_gate_ready_radius_tolerance", 6.0)
+        self.declare_parameter("orbit_gate_min_valid_samples", 20)
         self.declare_parameter("orbit_gate_required_laps", 1.0)
-        self.declare_parameter("orbit_gate_min_accumulated_angle_deg", 330.0)
-        self.declare_parameter("orbit_gate_return_tolerance_deg", 45.0)
+        self.declare_parameter("orbit_gate_min_accumulated_angle_deg", 360.0)
+        self.declare_parameter("orbit_gate_return_tolerance_deg", 20.0)
         self.declare_parameter("carrier_prehold_required", False)
         self.declare_parameter("carrier_prehold_min_altitude_m", 0.0)
         self.declare_parameter("carrier_prehold_max_abs_vz_mps", 2.5)
@@ -306,6 +334,13 @@ class DockingWindowStarter(Node):
             0.0,
             float(self.get_parameter("rear_entry_global_intercept_primary_score_threshold").value),
         )
+        self.rear_entry_global_intercept_min_rel_distance_m = max(
+            0.0,
+            float(self.get_parameter("rear_entry_global_intercept_min_rel_distance_m").value),
+        )
+        self.rear_entry_global_intercept_min_speed_margin_mps = float(
+            self.get_parameter("rear_entry_global_intercept_min_speed_margin_mps").value
+        )
         self.rear_entry_require_non_diverging = bool(
             self.get_parameter("rear_entry_require_non_diverging").value
         )
@@ -490,12 +525,25 @@ class DockingWindowStarter(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
+        self.no_qos_events = SubscriptionEventCallbacks(use_default_callbacks=False)
         self.command_pub = self.create_publisher(DockingCommand, "/docking/command", 10)
         self.command_latched_pub = self.create_publisher(
             DockingCommand, "/docking/command_latched", latched_qos
         )
-        self.create_subscription(Odometry, "/carrier/odom", self._carrier_cb, 10)
-        self.create_subscription(Odometry, "/mini/odom", self._mini_cb, 10)
+        self.create_subscription(
+            Odometry,
+            "/carrier/odom",
+            self._carrier_cb,
+            10,
+            event_callbacks=self.no_qos_events,
+        )
+        self.create_subscription(
+            Odometry,
+            "/mini/odom",
+            self._mini_cb,
+            10,
+            event_callbacks=self.no_qos_events,
+        )
         if self.require_mini_energy_healthy and AirspeedValidated is not None:
             self._subscribe_mini_airspeed_topics(px4_qos)
         if self.require_mini_energy_healthy and TecsStatus is not None:
@@ -527,6 +575,7 @@ class DockingWindowStarter(Node):
                 f"{self.mini_px4_namespace}/fmu/out/{topic}",
                 self._mini_airspeed_cb,
                 px4_qos,
+                event_callbacks=self.no_qos_events,
             )
 
     def _subscribe_mini_tecs_topics(self, px4_qos: QoSProfile) -> None:
@@ -542,6 +591,7 @@ class DockingWindowStarter(Node):
                 f"{self.mini_px4_namespace}/fmu/out/{topic}",
                 self._mini_tecs_cb,
                 px4_qos,
+                event_callbacks=self.no_qos_events,
             )
 
     @staticmethod
@@ -1073,8 +1123,12 @@ class DockingWindowStarter(Node):
                 )
                 global_intercept_primary_gate_ok = (
                     intercept_front_geometry_ok and
+                    rel_distance_xy >= self.rear_entry_global_intercept_min_rel_distance_m and
                     math.isfinite(prediction_score) and
                     prediction_score <= self.rear_entry_global_intercept_primary_score_threshold and
+                    math.isfinite(global_intercept_speed_margin_mps) and
+                    global_intercept_speed_margin_mps >=
+                    self.rear_entry_global_intercept_min_speed_margin_mps and
                     math.isfinite(global_intercept_route_distance_m) and
                     8.0 <= global_intercept_route_distance_m <=
                     max(
@@ -1386,8 +1440,7 @@ class DockingWindowStarter(Node):
         )
         rear_entry_energy_timing_ok_effective = (
             rear_entry_energy_timing_ok or
-            energy_early_release_ok or
-            intercept_release_timing_ok
+            energy_early_release_ok
         )
         smoke_early_reject_active = (
             self.rear_entry_smoke_early_reject_tca_max_sec > 0.0 and
@@ -1444,11 +1497,36 @@ class DockingWindowStarter(Node):
             ) or
             intercept_front_geometry_ok
         )
-        release_on_orbit_completion_ok = (
+        release_on_orbit_completion_raw = (
             self.release_on_orbit_completion and
             self.orbit_gate_completed and
             self.orbit_gate_completed_elapsed_sec is not None and
             (elapsed - self.orbit_gate_completed_elapsed_sec) >= self.release_after_orbit_delay_sec
+        )
+        release_altitude_ok = rel_z >= self.relative_z_min_m
+        release_on_orbit_completion_prediction_ok = (
+            release_on_orbit_completion_raw and
+            release_altitude_ok
+        )
+        release_on_orbit_completion_late_intercept_ok = (
+            release_on_orbit_completion_raw and
+            release_altitude_ok and
+            rear_entry_ahead_effective_ok and
+            rel_distance_xy <= self.rear_entry_prediction_distance_min_m and
+            global_intercept_relaxed_route_ok and
+            global_intercept_relaxed_speed_ok and
+            math.isfinite(prediction_along_m) and
+            -self.rear_entry_prediction_along_max_m <= prediction_along_m <=
+            -max(self.rear_entry_min_carrier_ahead_m, 1.0) and
+            math.isfinite(prediction_lateral_m) and
+            abs(prediction_lateral_m) <= self.rear_entry_prediction_secondary_lateral_max_m and
+            (not global_intercept_block_local_release) and
+            (not smoke_early_reject_active) and
+            (not smoke_prediction_reject_active)
+        )
+        release_on_orbit_completion_ok = (
+            release_on_orbit_completion_prediction_ok or
+            release_on_orbit_completion_late_intercept_ok
         )
         rear_entry_window_ok = (
             rel_z >= self.relative_z_min_m and
@@ -1522,7 +1600,10 @@ class DockingWindowStarter(Node):
                 f"pred_sec_ok={int(prediction_secondary_gate_ok)} "
                 f"smoke_early_reject={int(smoke_early_reject_active)} "
                 f"smoke_pred_reject={int(smoke_prediction_reject_active)} "
+                f"orbit_release_raw={int(release_on_orbit_completion_raw)} "
+                f"release_alt_ok={int(release_altitude_ok)} "
                 f"orbit_release_ok={int(release_on_orbit_completion_ok)} "
+                f"late_intercept_ok={int(release_on_orbit_completion_late_intercept_ok)} "
                 f"cluster={geometry_cluster_score:.3f} "
                 f"hold={self.hold_count}/{self.hold_count_required}"
             )
@@ -1782,13 +1863,45 @@ class DockingWindowStarter(Node):
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
     rclpy.init()
     node = DockingWindowStarter()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except TypeError as exc:
+                message = str(exc)
+                if "unsupported operand type(s) for +: 'int' and 'NoneType'" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy waitable count glitch ignored; rebuilding window executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except UnboundLocalError as exc:
+                message = str(exc)
+                if "local variable '_exit' referenced before assignment" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy context stack glitch ignored; rebuilding window executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+    except SystemExit:
+        pass
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

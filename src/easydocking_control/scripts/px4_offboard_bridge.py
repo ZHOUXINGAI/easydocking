@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 
+import faulthandler
 import math
+import time
 
 import rclpy
 from easydocking_msgs.msg import DockingCommand
 from easydocking_msgs.msg import DockingStatus
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav_msgs.msg import Odometry
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos_event import SubscriptionEventCallbacks
 
 try:
     from px4_msgs.msg import OffboardControlMode, TrajectorySetpoint, VehicleCommand
@@ -16,6 +20,30 @@ except ImportError:  # pragma: no cover
     OffboardControlMode = None
     TrajectorySetpoint = None
     VehicleCommand = None
+
+
+def _patch_rclpy_waitable_add() -> None:
+    try:
+        from rclpy.waitable import NumberOfEntities
+    except Exception:  # pragma: no cover
+        return
+    if getattr(NumberOfEntities, "_easydocking_safe_add_patched", False):
+        return
+
+    def _safe_add(self, other):
+        result = self.__class__()
+        for attr in result.__slots__:
+            left = getattr(self, attr, 0)
+            right = getattr(other, attr, 0)
+            if left is None:
+                left = 0
+            if right is None:
+                right = 0
+            setattr(result, attr, left + right)
+        return result
+
+    NumberOfEntities.__add__ = _safe_add
+    NumberOfEntities._easydocking_safe_add_patched = True
 
 
 class Px4OffboardBridge(Node):
@@ -140,20 +168,47 @@ class Px4OffboardBridge(Node):
         self.mini_last_odom_time_sec = None
         self.mini_last_velocity_xy = None
         self.mini_accel_xy = (0.0, 0.0)
+        no_qos_events = SubscriptionEventCallbacks(use_default_callbacks=False)
 
         self.create_subscription(
-            PoseStamped, f"/{self.uav_name}/setpoint/pose", self._pose_setpoint_cb, 10
+            PoseStamped,
+            f"/{self.uav_name}/setpoint/pose",
+            self._pose_setpoint_cb,
+            10,
+            event_callbacks=no_qos_events,
         )
         self.create_subscription(
-            TwistStamped, f"/{self.uav_name}/setpoint/velocity", self._velocity_setpoint_cb, 10
+            TwistStamped,
+            f"/{self.uav_name}/setpoint/velocity",
+            self._velocity_setpoint_cb,
+            10,
+            event_callbacks=no_qos_events,
         )
-        self.create_subscription(Odometry, f"/{self.uav_name}/odom", self._odom_cb, 10)
+        self.create_subscription(
+            Odometry,
+            f"/{self.uav_name}/odom",
+            self._odom_cb,
+            10,
+            event_callbacks=no_qos_events,
+        )
         if (
             self.same_direction_guard_enabled and
             (not self.same_direction_guard_only_carrier or self.uav_name == "carrier")
         ):
-            self.create_subscription(Odometry, "/mini/odom", self._mini_odom_cb, 10)
-        self.create_subscription(DockingCommand, "/docking/command", self._command_cb, 10)
+            self.create_subscription(
+                Odometry,
+                "/mini/odom",
+                self._mini_odom_cb,
+                10,
+                event_callbacks=no_qos_events,
+            )
+        self.create_subscription(
+            DockingCommand,
+            "/docking/command",
+            self._command_cb,
+            10,
+            event_callbacks=no_qos_events,
+        )
         self.create_subscription(
             DockingCommand,
             "/docking/command_latched",
@@ -163,8 +218,15 @@ class Px4OffboardBridge(Node):
                 reliability=ReliabilityPolicy.RELIABLE,
                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
             ),
+            event_callbacks=no_qos_events,
         )
-        self.create_subscription(DockingStatus, "/docking/status", self._status_cb, 10)
+        self.create_subscription(
+            DockingStatus,
+            "/docking/status",
+            self._status_cb,
+            10,
+            event_callbacks=no_qos_events,
+        )
 
         if OffboardControlMode is None:
             self.get_logger().error(
@@ -534,11 +596,47 @@ class Px4OffboardBridge(Node):
 
 
 def main() -> None:
+    _patch_rclpy_waitable_add()
+    faulthandler.enable()
     rclpy.init()
     node = Px4OffboardBridge()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    try:
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except TypeError as exc:
+                message = str(exc)
+                if "unsupported operand type(s) for +: 'int' and 'NoneType'" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy waitable count glitch ignored; rebuilding offboard executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+            except UnboundLocalError as exc:
+                message = str(exc)
+                if "local variable '_exit' referenced before assignment" not in message:
+                    raise
+                node.get_logger().warn(
+                    "rclpy context stack glitch ignored; rebuilding offboard executor"
+                )
+                executor.remove_node(node)
+                executor.shutdown()
+                executor = SingleThreadedExecutor()
+                executor.add_node(node)
+                time.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
