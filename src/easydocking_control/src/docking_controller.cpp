@@ -1133,7 +1133,9 @@ void DockingController::computeCorridorPlan()
 	const Eigen::Vector3d carrier_pos = poseToEigen(carrier_pose_);
 	const Eigen::Vector3d mini_pos = poseToEigen(mini_pose_);
 
-	if (mini_orbit_radius_ < 0.01 || mini_orbit_speed_ < 0.01) {
+	if (!std::isfinite(mini_orbit_radius_) || !std::isfinite(mini_orbit_speed_) ||
+		mini_orbit_radius_ < 0.01 || mini_orbit_speed_ < 0.01)
+	{
 		corridor_plan_valid_ = false;
 		return;
 	}
@@ -1152,14 +1154,18 @@ void DockingController::computeCorridorPlan()
 	const Eigen::Vector2d OC = C - O;
 	const double d_oc = OC.norm();
 
-	if (d_oc <= R * 1.001) {
+	if (!std::isfinite(d_oc) || !O.allFinite() || !C.allFinite() || !M.allFinite() ||
+		d_oc <= R * 1.001)
+	{
 		corridor_plan_valid_ = false;
 		return;
 	}
 
-	// Geometric tangent points from C to orbit circle
+	// Geometric tangent points from external point C to the orbit circle.
+	// The radius-to-tangent angle relative to O->C is acos(R / |OC|).
+	// Using asin here does not generally satisfy (C - T) dot (T - O) = 0.
 	const double alpha = std::atan2(OC.y(), OC.x());
-	const double beta = std::asin(R / d_oc);
+	const double beta = std::acos(R / d_oc);
 
 	const auto tang_dir = [](double theta) -> Eigen::Vector2d {
 		return Eigen::Vector2d(-std::sin(theta), std::cos(theta));
@@ -1175,6 +1181,15 @@ void DockingController::computeCorridorPlan()
 	double theta_T = score_1 >= score_2 ? theta_1 : theta_2;
 	Eigen::Vector2d T = score_1 >= score_2 ? T1 : T2;
 	Eigen::Vector2d tang = tang_dir(theta_T);
+	const double tangent_radius_residual = std::abs((T - O).norm() - R);
+	const double tangent_orthogonality_residual =
+		std::abs((C - T).dot(T - O));
+	if (tangent_radius_residual > 1.0e-6 * std::max(1.0, R) ||
+		tangent_orthogonality_residual > 1.0e-6 * std::max(1.0, d_oc * R))
+	{
+		corridor_plan_valid_ = false;
+		return;
+	}
 
 	// Mini timing: use the measured orbit phase at START when it is plausible.
 	// PX4 takeoff odom can drift, but the measured orbit state is still a
@@ -1189,24 +1204,16 @@ void DockingController::computeCorridorPlan()
 	double delta_theta = theta_T - theta_m;
 	while (delta_theta <= 0.0) { delta_theta += 2.0 * M_PI; }
 
-	// Circular arc trajectory: from C to T, tangent to mini's orbit at T.
-	// Arc center M_arc lies on the line O→T. Radius r satisfies |C-M|=|T-M|=r.
-	const double d = d_oc;
-	const double cos_alpha = OC.dot(T - O) / (d * R);
-	const double numer = d * d - R * R;
-	const double denom = 2.0 * R * (d * cos_alpha - R);
-	const double k = (std::abs(denom) > 0.01) ? (numer / denom) : 2.0;
-	const Eigen::Vector2d M_arc = O + k * (T - O);
-	const double r_arc = std::abs(k - 1.0) * R;
-
-	// Arc angles from M_arc to C and T
-	const double phi_start = std::atan2(C.y() - M_arc.y(), C.x() - M_arc.x());
-	const double phi_end   = std::atan2(T.y() - M_arc.y(), T.x() - M_arc.x());
-	// Shortest angular difference (signed)
-	double dphi = phi_end - phi_start;
-	while (dphi >  M_PI) { dphi -= 2.0 * M_PI; }
-	while (dphi < -M_PI) { dphi += 2.0 * M_PI; }
-	const double arc_len = r_arc * std::abs(dphi);
+	// Because T is the true external tangent from C, C->T is already parallel
+	// to the selected orbit tangent. With no carrier start-heading constraint,
+	// the minimum-curvature approach is a straight segment (a degenerate arc).
+	// A nonzero-curvature approach requires an additional start heading and a
+	// Dubins/biarc construction; inventing a circle here produces false geometry.
+	const Eigen::Vector2d M_arc = C;
+	const double r_arc = 0.0;
+	const double phi_start = 0.0;
+	const double dphi = 0.0;
+	const double arc_len = (T - C).norm();
 
 	// Target Z: idle hover altitude (30m), must match mini orbit altitude
 	const double target_z = idle_hover_altitude_;
@@ -1215,13 +1222,13 @@ void DockingController::computeCorridorPlan()
 	corridor_traj_start_time_ = 0.0;
 	corridor_traj_active_ = false;
 
-	// Store arc parameters for trajectory tracking
+	// Radius zero is the explicit marker for the straight-tangent approach.
 	corridor_arc_center_ = M_arc;
 	corridor_arc_radius_ = r_arc;
 	corridor_arc_phi_start_ = phi_start;
 	corridor_arc_delta_phi_ = dphi;
 
-	// Time-parameterize the carrier arc so it reaches T before the mini.
+	// Time-parameterize the carrier approach so it reaches T before the mini.
 	// The resulting lead gives the fixed-wing several seconds on the tangent
 	// to settle speed/height before terminal closure.
 	const double carrier_corridor_speed_max =
@@ -1308,9 +1315,10 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
       }
     }
 
-    // ── Corridor Plan Trajectory Tracking (circular arc) ──
-    // Arc from C to T, tangent to mini's orbit at T.
-    // P(φ) = M_arc + r * (cos φ, sin φ), φ = φ_start + frac * Δφ
+    // ── Corridor Plan Trajectory Tracking ──
+    // A true external tangent constructed from C makes C->T a straight,
+    // zero-curvature approach. The circular branch remains for future plans
+    // that also provide an explicit carrier start-heading constraint.
     if (corridor_plan_valid_ && corridor_traj_active_) {
       ++corridor_traj_counter_;
       const double elapsed = corridor_traj_counter_ / control_rate_;
@@ -1331,16 +1339,27 @@ void DockingController::approachPhaseControl(geometry_msgs::msg::Twist& carrier_
           std::max(corridor_planned_speed_, 0.1),
         0.0,
         1.0);
-      const double phi = corridor_arc_phi_start_ + frac * corridor_arc_delta_phi_;
-      const double c = std::cos(phi);
-      const double s = std::sin(phi);
-      const Eigen::Vector2d pos_2d =
-        corridor_arc_center_ + corridor_arc_radius_ * Eigen::Vector2d(c, s);
-      // Tangent direction along the arc (derivative of position wrt φ, normalized)
-      const Eigen::Vector2d tang_2d =
-        (corridor_arc_delta_phi_ > 0.0)
-          ? Eigen::Vector2d(-s, c)
-          : Eigen::Vector2d(s, -c);
+      Eigen::Vector2d pos_2d;
+      Eigen::Vector2d tang_2d;
+      if (corridor_arc_radius_ <= 1.0e-6) {
+        const Eigen::Vector2d start_2d(
+          corridor_traj_start_.x(), corridor_traj_start_.y());
+        const Eigen::Vector2d end_2d(
+          corridor_traj_end_.x(), corridor_traj_end_.y());
+        pos_2d = start_2d + frac * (end_2d - start_2d);
+        tang_2d = (end_2d - start_2d).normalized();
+      } else {
+        const double phi = corridor_arc_phi_start_ + frac * corridor_arc_delta_phi_;
+        const double c = std::cos(phi);
+        const double s = std::sin(phi);
+        pos_2d =
+          corridor_arc_center_ + corridor_arc_radius_ * Eigen::Vector2d(c, s);
+        // Tangent direction along the arc (derivative wrt phi, normalized).
+        tang_2d =
+          (corridor_arc_delta_phi_ > 0.0)
+            ? Eigen::Vector2d(-s, c)
+            : Eigen::Vector2d(s, -c);
+      }
       const double z_start = corridor_traj_start_.z();
       const double z_end   = corridor_traj_end_.z();
       const Eigen::Vector3d mini_pos_current = poseToEigen(mini_pose_);

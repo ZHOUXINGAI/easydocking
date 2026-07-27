@@ -174,14 +174,15 @@ private:
   double corridor_hold_duration_;
   double corridor_planned_speed_;  // planned approach speed from corridor plan
   double corridor_mini_arrival_delay_; // t_mini: time for mini to orbit to T
-  // Time-parameterized trajectory: circular arc from C to T, tangent to orbit
+  // Time-parameterized approach from C to T. A true external tangent without
+  // a start-heading constraint is represented as a zero-radius straight arc.
   Eigen::Vector3d corridor_traj_start_;
   Eigen::Vector3d corridor_traj_end_;
   double corridor_traj_duration_;
   double corridor_traj_start_time_;
   bool corridor_traj_active_;
   int corridor_traj_counter_;
-  // Arc parameters: center M, radius r, start/end angles φ, angular velocity ω
+  // Arc parameters; radius zero explicitly selects straight interpolation.
   Eigen::Vector2d corridor_arc_center_;
   double corridor_arc_radius_;
   double corridor_arc_phi_start_;
