@@ -193,6 +193,15 @@ class GroundCorridorPlan:
     sender_monotonic_ms: int
     valid_until_sender_monotonic_ms: int
     validity_ms: int
+    requested_validity_ms: int
+    required_validity_ms: int
+    validity_margin_ms: int
+    post_tangent_reserve_ms: int
+    terminal_completion_budget_ms: int
+    completion_hold_ms: int
+    plan_timing_guard_ms: int
+    validity_policy: Literal["reject"]
+    validity_extended: bool
     orbit_center: Vec2
     orbit_radius_m: float
     turn_direction: TurnDirection
@@ -238,6 +247,12 @@ def minimum_rest_to_rest_time(
     return 2.0 * max_speed_mps / max_accel_mps2 + cruise_distance / max_speed_mps
 
 
+def ceil_milliseconds(value_ms: int, quantum_ms: int = 100) -> int:
+    if value_ms < 0 or quantum_ms <= 0:
+        raise ValueError("milliseconds and quantum must be nonnegative and positive")
+    return ((value_ms + quantum_ms - 1) // quantum_ms) * quantum_ms
+
+
 def compute_ground_corridor_plan(
     *,
     plan_id: int,
@@ -258,10 +273,13 @@ def compute_ground_corridor_plan(
     terminal_lead_ms: int = 800,
     terminal_length_m: float = 8.0,
     target_front_gap_m: float = 0.35,
-    validity_ms: int = 30_000,
+    validity_ms: int = 32_000,
     command_ttl_ms: int = 500,
     local_command_watchdog_ms: int = 750,
     mini_state_stale_ms: int = 300,
+    terminal_completion_budget_ms: int = 2_000,
+    completion_hold_ms: int = 500,
+    plan_timing_guard_ms: int = 100,
 ) -> GroundCorridorPlan:
     if plan_id <= 0 or sequence <= 0:
         raise ValueError("plan_id and sequence must be positive")
@@ -289,6 +307,9 @@ def compute_ground_corridor_plan(
         or command_ttl_ms <= 0
         or local_command_watchdog_ms <= 0
         or mini_state_stale_ms <= 0
+        or terminal_completion_budget_ms <= 0
+        or completion_hold_ms <= 0
+        or plan_timing_guard_ms < 0
     ):
         raise ValueError("plan and command timing limits must be positive")
 
@@ -315,6 +336,24 @@ def compute_ground_corridor_plan(
     while exit_delta / mini_angular_speed < required_delay_s:
         exit_delta += 2.0 * math.pi
     mini_arrival_delay_s = exit_delta / mini_angular_speed
+    mini_arrival_delay_ms = int(round(mini_arrival_delay_s * 1000.0))
+    post_tangent_reserve_ms = (
+        terminal_completion_budget_ms
+        + completion_hold_ms
+        + max(command_ttl_ms, local_command_watchdog_ms)
+        + plan_timing_guard_ms
+    )
+    required_validity_ms = ceil_milliseconds(
+        mini_arrival_delay_ms + post_tangent_reserve_ms
+    )
+    if validity_ms < required_validity_ms:
+        raise ValueError(
+            "plan_validity_insufficient:"
+            f"requested={validity_ms}ms,"
+            f"required={required_validity_ms}ms,"
+            f"mini_arrival={mini_arrival_delay_ms}ms,"
+            f"post_tangent_reserve={post_tangent_reserve_ms}ms"
+        )
     approach_duration_s = max(
         minimum_carrier_time_s,
         mini_arrival_delay_s - terminal_lead_ms / 1000.0,
@@ -330,7 +369,7 @@ def compute_ground_corridor_plan(
         planned_speed_mps=approach_length / (approach_duration_ms / 1000.0),
     )
     return GroundCorridorPlan(
-        schema_version=1,
+        schema_version=2,
         plan_id=plan_id,
         sequence=sequence,
         frame_id=frame_id,
@@ -341,6 +380,15 @@ def compute_ground_corridor_plan(
             validity_ms,
         ),
         validity_ms=validity_ms,
+        requested_validity_ms=validity_ms,
+        required_validity_ms=required_validity_ms,
+        validity_margin_ms=validity_ms - required_validity_ms,
+        post_tangent_reserve_ms=post_tangent_reserve_ms,
+        terminal_completion_budget_ms=terminal_completion_budget_ms,
+        completion_hold_ms=completion_hold_ms,
+        plan_timing_guard_ms=plan_timing_guard_ms,
+        validity_policy="reject",
+        validity_extended=False,
         orbit_center=orbit_center,
         orbit_radius_m=orbit_radius_m,
         turn_direction=turn_direction,
@@ -349,7 +397,7 @@ def compute_ground_corridor_plan(
         tangent_phase_rad=tangent.phase_rad,
         mini_phase_at_plan_rad=mini_phase_rad % (2.0 * math.pi),
         mini_exit_delta_rad=exit_delta,
-        mini_arrival_delay_ms=int(round(mini_arrival_delay_s * 1000.0)),
+        mini_arrival_delay_ms=mini_arrival_delay_ms,
         required_stable_orbit_laps=required_stable_orbit_laps,
         terminal_length_m=terminal_length_m,
         target_front_gap_m=target_front_gap_m,

@@ -92,6 +92,7 @@ class GroundDockingLeaderTest(unittest.TestCase):
                 "carrier_behind": True,
                 "pre_tangent_completion_blocked": True,
                 "tangent_degeneracy_rejected": True,
+                "plan_validity_rejected": True,
                 "expired_command": True,
                 "abort_latched": True,
                 "reset_new_attempt": True,
@@ -297,7 +298,7 @@ class GroundDockingLeaderTest(unittest.TestCase):
         self.assertEqual(snapshot.completion_hold_ms, 0)
 
     def test_invalid_orbit_sample_resets_stable_lap_qualification(self) -> None:
-        harness = ReplayHarness()
+        harness = ReplayHarness(LeaderConfig(plan_validity_ms=50_000))
         harness.leader.start_attempt(attempt_id=91, now_local_ms=0)
         phase = 0.0
         angular_step = (

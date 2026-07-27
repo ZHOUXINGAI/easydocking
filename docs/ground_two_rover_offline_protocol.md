@@ -102,6 +102,10 @@ timestamp regression are rejected before planner use.
 - `schema_version`, `plan_id`, `sequence`
 - `frame_id`, `origin_id`
 - `sender_monotonic_ms`, `valid_until_sender_monotonic_ms`, `validity_ms`
+- `requested_validity_ms`, `required_validity_ms`, `validity_margin_ms`
+- `post_tangent_reserve_ms`, `terminal_completion_budget_ms`,
+  `completion_hold_ms`, `plan_timing_guard_ms`
+- `validity_policy`, `validity_extended`
 - `orbit_center`, `orbit_radius_m`, `turn_direction`
 - `tangent_point`, `tangent_direction`, `tangent_phase_rad`
 - `mini_phase_at_plan_rad`, `mini_exit_delta_rad`,
@@ -125,7 +129,28 @@ ordering and packet TTL only. A receiver starts TTL at local receipt and never
 compares the absolute monotonic clocks of Orin1 and Orin2.
 
 Defaults are MiniState stale `300ms`, PlanCommand TTL `500ms`, local command
-watchdog `750ms`, and plan validity `30000ms`.
+watchdog `750ms`, and requested plan validity `32000ms`. Plan schema version 2
+uses a fail-closed `reject` policy. The planner computes:
+
+```text
+post_tangent_reserve =
+    terminal_completion_budget
+  + completion_hold
+  + max(command_ttl, local_command_watchdog)
+  + timing_guard
+
+required_validity =
+    ceil_to_100ms(mini_arrival_delay + post_tangent_reserve)
+```
+
+The defaults reserve `3350ms` after Mini reaches the tangent. If requested
+validity is smaller than the computed requirement, plan creation aborts with
+`plan_validity_insufficient`; validity is never silently extended.
+
+`target_front_gap_m` is protocol metadata for the next closed-loop follower.
+The current offline leader emits bounded speed/yaw-rate commands but does not
+yet regulate that exact target gap. A passing replay must not be described as
+implemented gap closure.
 
 ## Offline Usage
 

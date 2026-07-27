@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from ground_corridor_geometry import (  # noqa: E402
     add,
+    compute_ground_corridor_plan,
     external_tangent_candidates,
     scale,
     tangent_direction,
@@ -320,6 +321,32 @@ def run_fault_replays() -> dict[str, Any]:
     except ValueError:
         tangent_degeneracy_rejected = True
 
+    plan_validity_rejected = False
+    plan_validity_reason = None
+    try:
+        compute_ground_corridor_plan(
+            plan_id=206,
+            sequence=206,
+            frame_id="field_enu",
+            origin_id=1,
+            sender_monotonic_ms=1_000_000,
+            carrier_position=(-7.0, -6.0),
+            mini_phase_rad=math.radians(315.0),
+            orbit_center=(0.0, 0.0),
+            orbit_radius_m=4.5,
+            turn_direction="ccw",
+            mini_speed_mps=0.9,
+            mini_max_accel_mps2=0.5,
+            carrier_max_speed_mps=0.7,
+            carrier_max_accel_mps2=0.3,
+            validity_ms=1,
+        )
+    except ValueError as exc:
+        plan_validity_reason = str(exc)
+        plan_validity_rejected = plan_validity_reason.startswith(
+            "plan_validity_insufficient:"
+        )
+
     nominal = run_nominal_replay()
     command = nominal["plan"]
     command_harness = ReplayHarness()
@@ -389,6 +416,7 @@ def run_fault_replays() -> dict[str, Any]:
             and before_tangent_snapshot.completion_hold_ms == 0
         ),
         "tangent_degeneracy_rejected": tangent_degeneracy_rejected,
+        "plan_validity_rejected": plan_validity_rejected,
         "expired_command": watchdog.stop_reason(508) == "command_expired",
         "abort_latched": abort_latched,
         "reset_new_attempt": reset_new_attempt,
@@ -403,6 +431,7 @@ def run_fault_replays() -> dict[str, Any]:
             "sequence": regression.leader.abort_reason,
             "carrier_behind": behind_snapshot.abort_reason,
             "command": watchdog.stop_reason(508),
+            "plan_validity": plan_validity_reason,
         },
     }
 
@@ -413,7 +442,7 @@ def run_all() -> dict[str, Any]:
     deterministic = nominal_first == nominal_second
     faults = run_fault_replays()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": "offline_replay",
         "hardware_access": False,
         "nominal": nominal_first,

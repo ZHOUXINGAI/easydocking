@@ -76,9 +76,11 @@ class LeaderConfig:
     terminal_cross_track_limit_m: float = 0.20
     completion_distance_m: float = 0.50
     completion_hold_ms: int = 500
+    terminal_completion_budget_ms: int = 2_000
+    plan_timing_guard_ms: int = 100
     tangent_ready_tolerance_m: float = 0.25
     mini_state_stale_ms: int = 300
-    plan_validity_ms: int = 30_000
+    plan_validity_ms: int = 32_000
     command_ttl_ms: int = 500
     local_command_watchdog_ms: int = 750
 
@@ -100,6 +102,7 @@ class LeaderConfig:
             self.terminal_length_m,
             self.completion_distance_m,
             self.completion_hold_ms,
+            self.terminal_completion_budget_ms,
             self.mini_state_stale_ms,
             self.plan_validity_ms,
             self.command_ttl_ms,
@@ -112,6 +115,7 @@ class LeaderConfig:
             raise ValueError("leader limits and timing values must be finite and positive")
         nonnegative = (
             self.terminal_lead_ms,
+            self.plan_timing_guard_ms,
             self.target_front_gap_m,
             self.carrier_ahead_tolerance_m,
             self.terminal_cross_track_limit_m,
@@ -509,6 +513,11 @@ class GroundDockingLeader:
                 command_ttl_ms=self.config.command_ttl_ms,
                 local_command_watchdog_ms=self.config.local_command_watchdog_ms,
                 mini_state_stale_ms=self.config.mini_state_stale_ms,
+                terminal_completion_budget_ms=(
+                    self.config.terminal_completion_budget_ms
+                ),
+                completion_hold_ms=self.config.completion_hold_ms,
+                plan_timing_guard_ms=self.config.plan_timing_guard_ms,
             )
         except ValueError as exc:
             self._abort(f"planner_invalid:{exc}")

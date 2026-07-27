@@ -171,6 +171,87 @@ class GroundCorridorGeometryTest(unittest.TestCase):
             first.carrier_approach.planned_speed_mps,
             first.carrier_max_speed_mps,
         )
+        self.assertEqual(first.schema_version, 2)
+        self.assertEqual(first.mini_arrival_delay_ms, 28_483)
+        self.assertEqual(first.post_tangent_reserve_ms, 3_350)
+        self.assertEqual(first.required_validity_ms, 31_900)
+        self.assertEqual(first.validity_ms, 32_000)
+        self.assertEqual(first.validity_margin_ms, 100)
+        self.assertEqual(first.validity_policy, "reject")
+        self.assertFalse(first.validity_extended)
+
+    def test_plan_validity_boundary_is_fail_closed(self) -> None:
+        kwargs = dict(
+            plan_id=12,
+            sequence=8,
+            frame_id="field_enu",
+            origin_id=9,
+            sender_monotonic_ms=1234,
+            carrier_position=self.CARRIER,
+            mini_phase_rad=math.radians(315.0),
+            orbit_center=self.CENTER,
+            orbit_radius_m=self.RADIUS,
+            turn_direction="ccw",
+            mini_speed_mps=0.9,
+            mini_max_accel_mps2=0.5,
+            carrier_max_speed_mps=0.7,
+            carrier_max_accel_mps2=0.3,
+        )
+        exact = compute_ground_corridor_plan(**kwargs, validity_ms=31_900)
+        self.assertEqual(exact.validity_margin_ms, 0)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"plan_validity_insufficient:requested=31899ms,required=31900ms",
+        ):
+            compute_ground_corridor_plan(**kwargs, validity_ms=31_899)
+
+    def test_far_carrier_requires_explicitly_larger_validity(self) -> None:
+        kwargs = dict(
+            plan_id=13,
+            sequence=9,
+            frame_id="field_enu",
+            origin_id=9,
+            sender_monotonic_ms=1234,
+            carrier_position=(-20.0, -20.0),
+            mini_phase_rad=math.radians(315.0),
+            orbit_center=self.CENTER,
+            orbit_radius_m=self.RADIUS,
+            turn_direction="ccw",
+            mini_speed_mps=0.9,
+            mini_max_accel_mps2=0.5,
+            carrier_max_speed_mps=0.7,
+            carrier_max_accel_mps2=0.3,
+        )
+        with self.assertRaisesRegex(ValueError, "plan_validity_insufficient"):
+            compute_ground_corridor_plan(**kwargs)
+        explicit = compute_ground_corridor_plan(**kwargs, validity_ms=70_000)
+        self.assertGreater(explicit.required_validity_ms, 32_000)
+        self.assertEqual(
+            explicit.validity_margin_ms,
+            explicit.validity_ms - explicit.required_validity_ms,
+        )
+
+    def test_post_tangent_reserve_uses_larger_ttl_or_watchdog(self) -> None:
+        plan = compute_ground_corridor_plan(
+            plan_id=14,
+            sequence=10,
+            frame_id="field_enu",
+            origin_id=9,
+            sender_monotonic_ms=1234,
+            carrier_position=self.CARRIER,
+            mini_phase_rad=math.radians(315.0),
+            orbit_center=self.CENTER,
+            orbit_radius_m=self.RADIUS,
+            turn_direction="ccw",
+            mini_speed_mps=0.9,
+            mini_max_accel_mps2=0.5,
+            carrier_max_speed_mps=0.7,
+            carrier_max_accel_mps2=0.3,
+            command_ttl_ms=1_200,
+            local_command_watchdog_ms=750,
+            validity_ms=40_000,
+        )
+        self.assertEqual(plan.post_tangent_reserve_ms, 3_800)
 
     def test_cpp_uses_correct_formula_and_straight_tangent_marker(self) -> None:
         source = (
