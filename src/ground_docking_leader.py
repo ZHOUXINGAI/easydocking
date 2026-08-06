@@ -56,6 +56,8 @@ class CommandPhase(str, Enum):
 
 @dataclass(frozen=True)
 class LeaderConfig:
+    carrier_vehicle_id: int = 1
+    mini_vehicle_id: int = 2
     frame_id: str = "field_enu"
     origin_id: int = 1
     orbit_center: Vec2 = (0.0, 0.0)
@@ -85,6 +87,16 @@ class LeaderConfig:
     local_command_watchdog_ms: int = 750
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.carrier_vehicle_id, bool)
+            or isinstance(self.mini_vehicle_id, bool)
+            or not isinstance(self.carrier_vehicle_id, int)
+            or not isinstance(self.mini_vehicle_id, int)
+            or not 1 <= self.carrier_vehicle_id <= 255
+            or not 1 <= self.mini_vehicle_id <= 255
+            or self.carrier_vehicle_id == self.mini_vehicle_id
+        ):
+            raise ValueError("carrier and mini vehicle IDs must be distinct uint8 values")
         if not self.frame_id or self.origin_id <= 0:
             raise ValueError("frame_id and nonzero origin_id are required")
         if self.turn_direction not in {"ccw", "cw"}:
@@ -356,7 +368,7 @@ class GroundDockingLeader:
         self._command_sequence = 0
 
     def accept_carrier_state(self, state: VehicleState) -> None:
-        if state.vehicle_id != 1:
+        if state.vehicle_id != self.config.carrier_vehicle_id:
             self._abort("invalid_carrier_vehicle_id")
             return
         if not self._state_identity_valid(state):
@@ -365,7 +377,7 @@ class GroundDockingLeader:
         self._carrier_state = state
 
     def accept_mini_state(self, state: VehicleState) -> bool:
-        if state.vehicle_id != 2:
+        if state.vehicle_id != self.config.mini_vehicle_id:
             self._abort("invalid_mini_vehicle_id")
             return False
         if not self._state_identity_valid(state):

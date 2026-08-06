@@ -3,6 +3,22 @@
 Status: pure-software baseline. This code does not open ROS, MAVLink, serial,
 LR24, PX4, Arduino, actuators, or vehicle executors.
 
+## Physical Identity And Docking Role
+
+Docking roles are configured independently from MAVLink system IDs through
+`LeaderConfig.carrier_vehicle_id` and `LeaderConfig.mini_vehicle_id`. Defaults
+remain Carrier `1` and Mini `2` for compatibility, but IDs must be distinct
+uint8 values.
+
+The active 2026-08-07 ground deployment reverses the earlier assignment:
+
+```text
+Orin2 / MAV_SYS_ID 2 -> Carrier leader
+Orin1 / MAV_SYS_ID 1 -> Mini executor
+```
+
+This role change does not authorize changing MAV_SYS_ID or Pair B wiring.
+
 ## Geometry
 
 All positions are in one surveyed ENU field frame: `x=East`, `y=North`, and

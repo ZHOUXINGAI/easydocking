@@ -58,6 +58,43 @@ def make_command(
 
 
 class GroundDockingLeaderTest(unittest.TestCase):
+    def test_physical_vehicle_ids_can_follow_reversed_host_roles(self) -> None:
+        config = LeaderConfig(carrier_vehicle_id=2, mini_vehicle_id=1)
+        harness = ReplayHarness(config)
+        result = run_nominal_replay(config=config)
+        self.assertTrue(result["pass"])
+
+        leader = GroundDockingLeader(config)
+        leader.start_attempt(attempt_id=1, now_local_ms=0)
+        mini_position, mini_velocity = orbit_state(config, 0.0)
+        wrong_carrier = VehicleState(
+            vehicle_id=1,
+            sequence=1,
+            sender_monotonic_ms=1,
+            received_local_ms=0,
+            frame_id=config.frame_id,
+            origin_id=config.origin_id,
+            position=(-7.0, -6.0),
+            velocity=(0.0, 0.0),
+            yaw_rad=0.0,
+        )
+        leader.accept_carrier_state(wrong_carrier)
+        self.assertEqual(leader.abort_reason, "invalid_carrier_vehicle_id")
+        self.assertEqual(harness.config.carrier_vehicle_id, 2)
+        self.assertEqual(harness.config.mini_vehicle_id, 1)
+
+    def test_vehicle_ids_must_be_distinct_uint8_values(self) -> None:
+        for kwargs in (
+            {"carrier_vehicle_id": 0},
+            {"mini_vehicle_id": 256},
+            {"carrier_vehicle_id": 1, "mini_vehicle_id": 1},
+            {"carrier_vehicle_id": True},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "distinct uint8"
+            ):
+                LeaderConfig(**kwargs)
+
     def test_nominal_replay_requires_sustained_completion(self) -> None:
         result = run_nominal_replay()
         self.assertTrue(result["pass"])

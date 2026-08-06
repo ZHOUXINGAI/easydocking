@@ -80,7 +80,7 @@ class ReplayHarness:
         self.mini_sequence = (self.mini_sequence + 1) & 0xFFFFFFFF
         self.leader.accept_carrier_state(
             self._state(
-                vehicle_id=1,
+                vehicle_id=self.config.carrier_vehicle_id,
                 sequence=self.carrier_sequence,
                 position=carrier_position,
                 velocity=carrier_velocity,
@@ -88,7 +88,7 @@ class ReplayHarness:
         )
         self.leader.accept_mini_state(
             self._state(
-                vehicle_id=2,
+                vehicle_id=self.config.mini_vehicle_id,
                 sequence=self.mini_sequence,
                 position=mini_position,
                 velocity=mini_velocity,
@@ -213,8 +213,10 @@ def advance_to_terminal(
     return snapshot
 
 
-def run_nominal_replay() -> dict[str, Any]:
-    harness = ReplayHarness()
+def run_nominal_replay(
+    config: LeaderConfig | None = None,
+) -> dict[str, Any]:
+    harness = ReplayHarness(config)
     snapshot = advance_to_terminal(harness)
     if snapshot.phase != LeaderPhase.SHARED_TERMINAL:
         raise RuntimeError(
